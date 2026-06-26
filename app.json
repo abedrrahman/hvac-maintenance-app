@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "hvac-maintenance-app",
+    "name": "HVAC Maintenance Reports",
     "slug": "hvac-maintenance-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -31,7 +31,18 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#1A2332"
+        }
+      ],
+      "expo-sqlite",
+      "expo-sharing",
+      "expo-image",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow access to photos for maintenance report attachments.",
+          "cameraPermission": "Allow camera access to capture site photos."
         }
       ]
     ],
