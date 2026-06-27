@@ -1,3 +1,10 @@
+import { Button } from '@/components/Button';
+import { DropdownPicker } from '@/components/DropdownPicker';
+import { ReportCard } from '@/components/ReportCard';
+import { MACHINE_TYPES } from '@/constants/machineTypes';
+import { colors, fontSize, spacing } from '@/constants/theme';
+import { deleteReport, getAllReports } from '@/db/repositories/reports';
+import { Report, ReportFilters } from '@/types';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
@@ -9,13 +16,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { ReportCard } from '@/components/ReportCard';
-import { Button } from '@/components/Button';
-import { colors, fontSize, spacing } from '@/constants/theme';
-import { MACHINE_TYPES } from '@/constants/machineTypes';
-import { deleteReport, getAllReports } from '@/db/repositories/reports';
-import { Report, ReportFilters } from '@/types';
-import { DropdownPicker } from '@/components/DropdownPicker';
 
 export default function ReportsListScreen() {
   const router = useRouter();
@@ -71,7 +71,7 @@ export default function ReportsListScreen() {
           placeholder="بحث..."
           placeholderTextColor={colors.textSecondary}
           value={search}
-          onChangeText={setSearch}
+          onDebouncedChange={setSearch}
           textAlign="right"
         />
         <Pressable

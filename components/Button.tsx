@@ -1,12 +1,10 @@
-import React from 'react';
+import { colors, fontSize, spacing } from '@/constants/theme';
 import {
   ActivityIndicator,
   Pressable,
   StyleSheet,
-  Text,
-  View,
+  Text
 } from 'react-native';
-import { colors, fontSize, spacing } from '@/constants/theme';
 
 interface Props {
   title: string;

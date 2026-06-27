@@ -119,6 +119,9 @@ function migrateV1(db: SQLite.SQLiteDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_photos_report ON photos(report_id);
     CREATE INDEX IF NOT EXISTS idx_signatures_report ON signatures(report_id);
   `);
+    db.execSync(`
+    CREATE INDEX IF NOT EXISTS idx_reports_machine ON reports(machine_id);
+  `);
 }
 
 function migrateV2(db: SQLite.SQLiteDatabase): void {
@@ -155,7 +158,6 @@ function migrateV2(db: SQLite.SQLiteDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_machines_client ON machines(client_name);
     CREATE INDEX IF NOT EXISTS idx_machines_serial ON machines(serial_number);
     CREATE INDEX IF NOT EXISTS idx_machines_model ON machines(model);
-    CREATE INDEX IF NOT EXISTS idx_reports_machine ON reports(machine_id);
   `);
 
   if (!columnExists(db, 'reports', 'machine_id')) {

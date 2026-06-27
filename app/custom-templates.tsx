@@ -1,12 +1,3 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import {
-  Alert,
-  FlatList,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
 import { Button } from '@/components/Button';
 import { FormField } from '@/components/FormField';
 import { colors, fontSize, spacing } from '@/constants/theme';
@@ -16,6 +7,15 @@ import {
   saveCustomChecklistTemplate,
 } from '@/db/repositories/reports';
 import { CustomChecklistTemplate } from '@/types';
+import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import {
+  Alert,
+  FlatList,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 export default function CustomTemplatesScreen() {
   const router = useRouter();
@@ -61,14 +61,14 @@ export default function CustomTemplatesScreen() {
         labelEn="English Label"
         labelAr="التسمية بالإنجليزية"
         value={labelEn}
-        onChangeText={setLabelEn}
+        onDebouncedChange={setLabelEn}
         placeholder="e.g. Motor Amps"
       />
       <FormField
         labelEn="Arabic Label"
         labelAr="التسمية بالعربية"
         value={labelAr}
-        onChangeText={setLabelAr}
+        onDebouncedChange={setLabelAr}
         placeholder="e.g. أمبير المotor"
       />
       <Button title="Add Field" onPress={handleAdd} variant="accent" />

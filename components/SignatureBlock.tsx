@@ -1,83 +1,106 @@
-import React, { useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import SignatureCanvas from 'react-native-signature-canvas';
 import { colors, fontSize, spacing } from '@/constants/theme';
+import { forwardRef, useImperativeHandle, useRef } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import SignatureCanvas from 'react-native-signature-canvas';
 
 interface Props {
-  label: string;
+  label?: string;
   onSave: (base64: string) => void;
   readOnly?: boolean;
   existingSignature?: string;
 }
 
-export function SignatureBlock({
-  label,
-  onSave,
-  readOnly,
-  existingSignature,
-}: Props) {
-  const ref = useRef<any>(null);
+export const SignatureBlock = forwardRef<any, Props>(
+  ({ label, onSave, readOnly, existingSignature }, ref) => {
+    const canvasRef = useRef<any>(null);
 
-  const handleEnd = () => {
-    ref.current?.readSignature();
-  };
+    useImperativeHandle(ref, () => ({
+      readSignature: () => canvasRef.current?.readSignature(),
+      clearSignature: () => canvasRef.current?.clearSignature(),
+    }));
 
-  const handleOK = (signature: string) => {
-    if (signature) {
-      onSave(signature);
+    const handleOK = (signature: string) => {
+      if (signature) {
+        onSave(signature);
+      }
+    };
+
+    if (readOnly && existingSignature) {
+      return (
+        <View style={styles.container}>
+          {!!label && <Text style={styles.label}>{label}</Text>}
+          <View style={styles.readOnlyBox}>
+            <Text style={styles.signedText}>✓ Signed</Text>
+          </View>
+        </View>
+      );
     }
-  };
 
-  if (readOnly && existingSignature) {
+    if (readOnly) {
+      return (
+        <View style={styles.container}>
+          {!!label && <Text style={styles.label}>{label}</Text>}
+          <View style={[styles.canvas, styles.readOnlyBox]}>
+            <Text style={styles.placeholder}>No signature</Text>
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.container}>
-        <Text style={styles.label}>{label}</Text>
-        <View style={styles.readOnlyBox}>
-          <Text style={styles.signedText}>✓ Signed</Text>
+        {!!label && <Text style={styles.label}>{label}</Text>}
+        <View style={styles.canvas}>
+          <SignatureCanvas
+            ref={canvasRef}
+            onOK={handleOK}
+            onEmpty={() => {}}
+            descriptionText=""
+            clearText=""
+            confirmText=""
+            webStyle={`
+              * { box-sizing: border-box; }
+              body, html { margin: 0; padding: 0; height: 100%; }
+              .m-signature-pad {
+                box-shadow: none;
+                border: none;
+                margin: 0;
+                width: 100%;
+                height: 100%;
+              }
+              .m-signature-pad--body {
+                border: none;
+                width: 100%;
+                height: 100%;
+              }
+              .m-signature-pad--footer {
+                display: none;
+              }
+            `}
+            autoClear={false}
+            backgroundColor="#FFFFFF"
+            penColor="#1A2332"
+            minWidth={2}
+            maxWidth={4}
+          />
+        </View>
+
+        <View style={styles.actions}>
+          <TouchableOpacity
+            style={styles.clearBtn}
+            onPress={() => canvasRef.current?.clearSignature()}
+          >
+            <Text style={styles.clearText}>مسح / Clear</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
-  }
-
-  if (readOnly) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.label}>{label}</Text>
-        <View style={[styles.canvas, styles.readOnlyBox]}>
-          <Text style={styles.placeholder}>No signature</Text>
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={styles.canvas}>
-        <SignatureCanvas
-          ref={ref}
-          onEnd={handleEnd}
-          onOK={handleOK}
-          onEmpty={() => {}}
-          descriptionText=""
-          clearText="Clear"
-          confirmText="Save"
-          webStyle={`.m-signature-pad { box-shadow: none; border: none; }
-            .m-signature-pad--body { border: none; }
-            .m-signature-pad--footer { display: none; }`}
-          autoClear={false}
-          backgroundColor="#FFFFFF"
-          penColor="#1A2332"
-        />
-      </View>
-    </View>
-  );
-}
+  },
+);
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    marginHorizontal: spacing.xs,
+    gap: spacing.sm,
   },
   label: {
     fontSize: fontSize.sm,
@@ -87,12 +110,14 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   canvas: {
-    height: 160,
-    borderWidth: 1,
+    height: 200,
+    minHeight: 200,
+    width: '100%',
+    borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: 8,
+    borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: colors.surface,
+    backgroundColor: '#FFFFFF',
   },
   readOnlyBox: {
     height: 160,
@@ -110,6 +135,23 @@ const styles = StyleSheet.create({
   },
   placeholder: {
     color: colors.textSecondary,
+    fontSize: fontSize.sm,
+  },
+  actions: {
+    flexDirection: 'row',
+  },
+  clearBtn: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+  },
+  clearText: {
+    color: colors.textSecondary,
+    fontWeight: '600',
     fontSize: fontSize.sm,
   },
 });

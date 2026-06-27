@@ -1,3 +1,7 @@
+import { getMachineTypeInfo } from '@/constants/machineTypes';
+import { colors, fontSize, spacing } from '@/constants/theme';
+import { getAllMachines } from '@/db/repositories/machines';
+import { Machine } from '@/types';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
@@ -8,10 +12,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { colors, fontSize, spacing } from '@/constants/theme';
-import { getAllMachines } from '@/db/repositories/machines';
-import { getMachineTypeInfo } from '@/constants/machineTypes';
-import { Machine } from '@/types';
 
 export default function MachinesListScreen() {
   const router = useRouter();
@@ -35,7 +35,7 @@ export default function MachinesListScreen() {
         placeholder="بحث بالعميل، الموديل، الرقم التسلسلي..."
         placeholderTextColor={colors.textSecondary}
         value={search}
-        onChangeText={setSearch}
+        onDebouncedChange={setSearch}
         textAlign="right"
       />
       <FlatList

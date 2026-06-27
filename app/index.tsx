@@ -1,3 +1,7 @@
+import { AseeLogo } from '@/components/AseeLogo';
+import { ReportCard } from '@/components/ReportCard';
+import { colors, fontSize, spacing } from '@/constants/theme';
+import { searchReportsGlobal } from '@/db/repositories/reports';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -9,10 +13,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AseeLogo } from '@/components/AseeLogo';
-import { colors, fontSize, spacing } from '@/constants/theme';
-import { searchReportsGlobal } from '@/db/repositories/reports';
-import { ReportCard } from '@/components/ReportCard';
 
 I18nManager.allowRTL(true);
 
@@ -42,7 +42,7 @@ export default function HomeScreen() {
           placeholder="بحث..."
           placeholderTextColor={colors.textSecondary}
           value={search}
-          onChangeText={handleSearch}
+          onDebouncedChange={handleSearch}
           textAlign="right"
         />
       </View>
@@ -128,10 +128,9 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl * 2,
   },
   header: {
-    backgroundColor: colors.primary,
-    borderRadius: 16,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
+    borderRadius: 1,
+    padding: spacing.xs,
+    marginBottom: spacing.xs,
     alignItems: 'center',
   },
   searchBox: {

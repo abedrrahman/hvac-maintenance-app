@@ -1,17 +1,3 @@
-import DateTimePicker from '@react-native-community/datetimepicker';
-import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  Image,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
 import { Button } from '@/components/Button';
 import { ChecklistSection } from '@/components/ChecklistSection';
 import { DropdownPicker } from '@/components/DropdownPicker';
@@ -23,8 +9,9 @@ import { StepContainer } from '@/components/StepContainer';
 import { UnitsSelector } from '@/components/UnitsSelector';
 import { FORM_STEPS, TOTAL_STEPS } from '@/constants/checklists';
 import { MAINTENANCE_TYPES } from '@/constants/company';
-import { colors, fontSize, spacing } from '@/constants/theme';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
+import { colors, fontSize, spacing } from '@/constants/theme';
+import { getMachineById } from '@/db/repositories/machines';
 import {
   addAttentionRow,
   addCustomChecklistItem,
@@ -33,7 +20,6 @@ import {
   deletePhoto,
   getFullReport,
   lockReport,
-  removeCustomChecklistItem,
   removeMaterialRow,
   saveSignature,
   syncMachineFromReport,
@@ -42,19 +28,117 @@ import {
   updateMaterial,
   updatePhotoCaption,
   updateReport,
-  updateReportUnits,
+  updateReportUnits
 } from '@/db/repositories/reports';
-import { exportReportPdf, sharePdf } from '@/services/pdfGenerator';
 import { useReport } from '@/hooks/useReport';
-import { hasValue, isReportLocked } from '@/utils/helpers';
-import { getMachineById } from '@/db/repositories/machines';
+import { exportReportPdf, sharePdf } from '@/services/pdfGenerator';
 import { PressureUnit, TempUnit } from '@/types';
+import { hasValue, isReportLocked } from '@/utils/helpers';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import * as ImagePicker from 'expo-image-picker';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Image,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+function MaterialRow({ mat, index, locked, onDelete, showDelete }: {
+  mat: { id: string; description: string; qty: string; unit: string };
+  index: number;
+  locked: boolean;
+  onDelete: () => void;
+  showDelete: boolean;
+}) {
+  const [desc, setDesc] = useState(mat.description);
+  const [qty, setQty] = useState(mat.qty);
+  const [unit, setUnit] = useState(mat.unit ?? '');
+
+  useEffect(() => { setDesc(mat.description); }, [mat.description]);
+  useEffect(() => { setQty(mat.qty); }, [mat.qty]);
+  useEffect(() => { setUnit(mat.unit ?? ''); }, [mat.unit]);
+
+  return (
+    <View style={styles.materialRow}>
+      <FormField
+        labelEn={`Material ${index + 1}`} labelAr={`مادة ${index + 1}`}
+        value={desc}
+        onChangeText={(v) => setDesc(v)}
+        onDebouncedChange={(v) => updateMaterial(mat.id, v, qty, unit)}
+        readOnly={locked} highlight={hasValue(desc)}
+      />
+      <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+        <View style={{ flex: 1 }}>
+          <FormField
+            labelEn="QTY" labelAr="الكمية"
+            value={qty}
+            onChangeText={(v) => setQty(v)}
+            onDebouncedChange={(v) => updateMaterial(mat.id, desc, v, unit)}
+            readOnly={locked}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <FormField
+            labelEn="Unit" labelAr="الوحدة"
+            value={unit}
+            onChangeText={(v) => setUnit(v)}
+            onDebouncedChange={(v) => updateMaterial(mat.id, desc, qty, v)}
+            readOnly={locked}
+          />
+        </View>
+      </View>
+      {showDelete && (
+        <Button title="✕ حذف" variant="danger" onPress={onDelete} />
+      )}
+    </View>
+  );
+}
+
+function AttentionRow({ note, index, locked, onBlur }: {
+  note: { id: string; unit_no: string; note: string };
+  index: number;
+  locked: boolean;
+  onBlur: () => void;
+}) {
+  const [unitNo, setUnitNo] = useState(note.unit_no);
+  const [noteText, setNoteText] = useState(note.note);
+  const filled = hasValue(noteText);
+
+  useEffect(() => { setUnitNo(note.unit_no); }, [note.unit_no]);
+  useEffect(() => { setNoteText(note.note); }, [note.note]);
+
+  return (
+    <View style={[styles.attentionRow, filled && styles.highlightRow]}>
+      <FormField
+        labelEn={`Unit ${index + 1}`} labelAr={`وحدة ${index + 1}`}
+        value={unitNo}
+        onChangeText={(v) => setUnitNo(v)}
+        onDebouncedChange={(v) => updateAttentionNote(note.id, v, noteText)}
+        onBlur={onBlur}
+        readOnly={locked}
+      />
+      <FormField
+        labelEn="Note" labelAr="ملاحظة"
+        value={noteText}
+        onChangeText={(v) => setNoteText(v)}
+        onDebouncedChange={(v) => updateAttentionNote(note.id, unitNo, v)}
+        onBlur={onBlur}
+        readOnly={locked} highlight={filled} multiline
+      />
+    </View>
+  );
+}
 
 export default function ReportStepScreen() {
-  const { id, step: stepParam } = useLocalSearchParams<{
-    id: string;
-    step: string;
-  }>();
+  const { id, step: stepParam } = useLocalSearchParams<{ id: string; step: string }>();
   const router = useRouter();
   const step = parseInt(stepParam ?? '1', 10);
   const { report, refresh } = useReport(id!);
@@ -69,6 +153,9 @@ export default function ReportStepScreen() {
   const [location, setLocation] = useState('');
   const [installYear, setInstallYear] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [activeSig, setActiveSig] = useState<'technician' | 'client' | null>(null);
+  const sigRef = useRef<any>(null);
+  const saveRequested = useRef(false);
 
   const locked = report ? isReportLocked(report.status) : false;
   const stepInfo = FORM_STEPS.find((s) => s.step === step) ?? FORM_STEPS[0];
@@ -103,12 +190,7 @@ export default function ReportStepScreen() {
 
   const saveDraft = () => {
     if (step === 2) {
-      syncMachineFromReport(report, {
-        brand,
-        capacity,
-        location,
-        installation_year: installYear,
-      });
+      syncMachineFromReport(report, { brand, capacity, location, installation_year: installYear });
     }
     refresh();
     Alert.alert('تم الحفظ', 'تم حفظ المسودة بنجاح.');
@@ -116,26 +198,18 @@ export default function ReportStepScreen() {
 
   const goNext = () => {
     if (step === 2) {
-      syncMachineFromReport(report, {
-        brand,
-        capacity,
-        location,
-        installation_year: installYear,
-      });
+      syncMachineFromReport(report, { brand, capacity, location, installation_year: installYear });
     }
-    if (step < TOTAL_STEPS) router.push(`/report/${id}/${step + 1}`);
+    if (step < TOTAL_STEPS) router.replace(`/report/${id}/${step + 1}`);
   };
 
   const goBack = () => {
-    if (step > 1) router.push(`/report/${id}/${step - 1}`);
+    if (step > 1) router.replace(`/report/${id}/${step - 1}`);
     else router.back();
   };
 
   const pickLogo = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.8,
-    });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
     if (!result.canceled && result.assets[0]) {
       updateReport(id!, { logo_uri: result.assets[0].uri });
       refresh();
@@ -143,10 +217,7 @@ export default function ReportStepScreen() {
   };
 
   const pickPhoto = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.7,
-    });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
     if (!result.canceled && result.assets[0]) {
       addPhoto(id!, result.assets[0].uri);
       refresh();
@@ -155,10 +226,7 @@ export default function ReportStepScreen() {
 
   const takePhoto = async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('تنبيه', 'مطلوب إذن الكاميرا.');
-      return;
-    }
+    if (!perm.granted) { Alert.alert('تنبيه', 'مطلوب إذن الكاميرا.'); return; }
     const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
     if (!result.canceled && result.assets[0]) {
       addPhoto(id!, result.assets[0].uri);
@@ -169,13 +237,8 @@ export default function ReportStepScreen() {
   const handleLockAndExport = async () => {
     const full = getFullReport(id!);
     if (!full) return;
-    const hasClientSig = full.signatures.some(
-      (s) => s.type === 'client' && hasValue(s.image_base64),
-    );
-    if (!hasClientSig) {
-      Alert.alert('تنبيه', 'يجب توقيع العميل قبل قفل التقرير.');
-      return;
-    }
+    const hasClientSig = full.signatures.some((s) => s.type === 'client' && hasValue(s.image_base64));
+    if (!hasClientSig) { Alert.alert('تنبيه', 'يجب توقيع العميل قبل قفل التقرير.'); return; }
     Alert.alert('قفل وتصدير', 'سيتم قفل التقرير نهائياً. متابعة؟', [
       { text: 'إلغاء', style: 'cancel' },
       {
@@ -211,11 +274,9 @@ export default function ReportStepScreen() {
           <>
             {locked && <LockedBadge />}
             <Pressable style={styles.logoPicker} onPress={pickLogo} disabled={locked}>
-              {report.logo_uri ? (
-                <Image source={{ uri: report.logo_uri }} style={styles.logo} />
-              ) : (
-                <Text style={styles.logoPlaceholder}>رفع شعار العلامة التجارية</Text>
-              )}
+              {report.logo_uri
+                ? <Image source={{ uri: report.logo_uri }} style={styles.logo} />
+                : <Text style={styles.logoPlaceholder}>رفع شعار العلامة التجارية</Text>}
             </Pressable>
             <Pressable onPress={() => !locked && setShowDatePicker(true)} disabled={locked}>
               <FormField labelEn="Date" labelAr="التاريخ" value={report.date} editable={false} highlight />
@@ -227,27 +288,34 @@ export default function ReportStepScreen() {
                 onChange={(_, date) => {
                   setShowDatePicker(Platform.OS === 'ios');
                   if (date) {
-                    updateReport(id!, {
-                      date: `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`,
-                    });
+                    updateReport(id!, { date: `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}` });
                     refresh();
                   }
                 }}
               />
             )}
-            <FormField labelEn="Client" labelAr="العميل" value={report.client}
-              onChangeText={(v) => updateReport(id!, { client: v })} onBlur={refresh}
-              readOnly={locked} highlight={hasValue(report.client)} />
-            <FormField labelEn="Site" labelAr="الموقع" value={report.site}
-              onChangeText={(v) => updateReport(id!, { site: v })} onBlur={refresh}
+            <FormField
+              labelEn="Client"
+              labelAr="العميل"
+              value={report.client}
+              onDebouncedChange={(v) => {
+                console.log("Typed:", v);
+              }}
+              readOnly={locked}
+              highlight={hasValue(report.client)}
+            />
+
+            <FormField labelEn="Site" labelAr="الموقع"
+              value={report.site}
+              onDebouncedChange={(v) => { updateReport(id!, { site: v }); refresh(); }}
               readOnly={locked} highlight={hasValue(report.site)} />
             <Pressable onPress={() => !locked && setShowMaintenancePicker(true)} disabled={locked}>
-              <FormField labelEn="Maintenance Type" labelAr="نوع الصيانة"
-                value={report.maintenance_type} editable={false} highlight />
+              <FormField labelEn="Maintenance Type" labelAr="نوع الصيانة" value={report.maintenance_type} editable={false} highlight />
             </Pressable>
             <FormField labelEn="ASEE Technician" labelAr="الفني – المهندس"
-              value={report.technician} onChangeText={(v) => updateReport(id!, { technician: v })}
-              onBlur={refresh} readOnly={locked} highlight={hasValue(report.technician)} />
+              value={report.technician}
+              onDebouncedChange={(v) => { updateReport(id!, { technician: v }); refresh(); }}
+              readOnly={locked} highlight={hasValue(report.technician)} />
           </>
         );
 
@@ -256,20 +324,19 @@ export default function ReportStepScreen() {
           <>
             {locked && <LockedBadge />}
             <Text style={styles.machineType}>{machineInfo?.labelAr} — {machineInfo?.labelEn}</Text>
-            <FormField labelEn="Brand" labelAr="العلامة" value={brand}
-              onChangeText={setBrand} readOnly={locked} />
-            <FormField labelEn="Model" labelAr="موديل المكينة" value={report.machine_model}
-              onChangeText={(v) => updateReport(id!, { machine_model: v })} onBlur={refresh}
+            <FormField labelEn="Brand" labelAr="العلامة" value={brand} onDebouncedChange={setBrand} readOnly={locked} />
+            <FormField labelEn="Model" labelAr="موديل المكينة"
+              value={report.machine_model}
+              onDebouncedChange={(v) => { updateReport(id!, { machine_model: v }); refresh(); }}
               readOnly={locked} highlight />
-            <FormField labelEn="S/N No." labelAr="الرقم التسلسلي" value={report.serial_no}
-              onChangeText={(v) => updateReport(id!, { serial_no: v })} onBlur={refresh}
+
+            <FormField labelEn="S/N No." labelAr="الرقم التسلسلي"
+              value={report.serial_no}
+              onDebouncedChange={(v) => { updateReport(id!, { serial_no: v }); refresh(); }}
               readOnly={locked} highlight />
-            <FormField labelEn="Capacity" labelAr="السعة" value={capacity}
-              onChangeText={setCapacity} readOnly={locked} />
-            <FormField labelEn="Location on Site" labelAr="الموقع في الموقع" value={location}
-              onChangeText={setLocation} readOnly={locked} />
-            <FormField labelEn="Installation Year" labelAr="سنة التركيب" value={installYear}
-              onChangeText={setInstallYear} readOnly={locked} keyboardType="number-pad" />
+            <FormField labelEn="Capacity" labelAr="السعة" value={capacity} onDebouncedChange={setCapacity} readOnly={locked} />
+            <FormField labelEn="Location on Site" labelAr="الموقع في الموقع" value={location} onDebouncedChange={setLocation} readOnly={locked} />
+            <FormField labelEn="Installation Year" labelAr="سنة التركيب" value={installYear} onDebouncedChange={setInstallYear} readOnly={locked} keyboardType="number-pad" />
           </>
         );
 
@@ -290,16 +357,13 @@ export default function ReportStepScreen() {
               tempUnit={report.temp_unit}
               pressureUnit={report.pressure_unit}
               readOnly={locked}
-              onUpdate={(itemId, value) => {
-                updateChecklistItem(itemId, value);
-                refresh();
-              }}
+              onUpdate={(itemId, value) => { updateChecklistItem(itemId, value); refresh(); }}
             />
             {!locked && (
               <View style={styles.customSection}>
                 <Text style={styles.customTitle}>إضافة صف مخصص</Text>
-                <FormField labelEn="English" labelAr="إنجليزي" value={customLabelEn} onChangeText={setCustomLabelEn} />
-                <FormField labelEn="Arabic" labelAr="عربي" value={customLabelAr} onChangeText={setCustomLabelAr} />
+                <FormField labelEn="English" labelAr="إنجليزي" value={customLabelEn} onDebouncedChange={setCustomLabelEn} />
+                <FormField labelEn="Arabic" labelAr="عربي" value={customLabelAr} onDebouncedChange={setCustomLabelAr} />
                 <Button title="إضافة" variant="secondary" onPress={() => {
                   if (!customLabelEn.trim()) return;
                   addCustomChecklistItem(id!, customLabelEn.trim(), customLabelAr.trim() || customLabelEn.trim());
@@ -316,8 +380,8 @@ export default function ReportStepScreen() {
             {locked && <LockedBadge />}
             <Text style={styles.sectionTitle}>الصيانة المطلوبة / Work Performed</Text>
             <FormField value={report.required_maintenance}
-              onChangeText={(v) => updateReport(id!, { required_maintenance: v })}
-              onBlur={refresh} readOnly={locked} multiline numberOfLines={8} style={styles.textArea} />
+              onDebouncedChange={(v) => { updateReport(id!, { required_maintenance: v }); refresh(); }}
+              readOnly={locked} multiline numberOfLines={8} style={styles.textArea} />
           </>
         );
 
@@ -326,20 +390,15 @@ export default function ReportStepScreen() {
           <>
             {locked && <LockedBadge />}
             <Text style={styles.sectionTitle}>بحاجة إلى انتباه | Attention Needed</Text>
-            {report.attention_notes.map((note, index) => {
-              const filled = hasValue(note.note);
-              return (
-                <View key={note.id} style={[styles.attentionRow, filled && styles.highlightRow]}>
-                  <FormField labelEn={`Unit ${index + 1}`} labelAr={`وحدة ${index + 1}`}
-                    value={note.unit_no}
-                    onChangeText={(v) => updateAttentionNote(note.id, v, note.note)}
-                    onBlur={refresh} readOnly={locked} />
-                  <FormField labelEn="Note" labelAr="ملاحظة" value={note.note}
-                    onChangeText={(v) => updateAttentionNote(note.id, note.unit_no, v)}
-                    onBlur={refresh} readOnly={locked} highlight={filled} multiline />
-                </View>
-              );
-            })}
+            {report.attention_notes.map((note, index) => (
+              <AttentionRow
+                key={note.id}
+                note={note}
+                index={index}
+                locked={locked}
+                onBlur={refresh}
+              />
+            ))}
             {!locked && (
               <Button title="+ إضافة صف" variant="secondary" onPress={() => { addAttentionRow(id!); refresh(); }} />
             )}
@@ -352,28 +411,17 @@ export default function ReportStepScreen() {
             {locked && <LockedBadge />}
             <Text style={styles.sectionTitle}>المواد المستخدمة | Materials Used</Text>
             {report.materials.map((mat, index) => (
-              <View key={mat.id} style={styles.materialRow}>
-                <FormField labelEn={`Material ${index + 1}`} labelAr={`مادة ${index + 1}`}
-                  value={mat.description}
-                  onChangeText={(v) => updateMaterial(mat.id, v, mat.qty, mat.unit)}
-                  onBlur={refresh} readOnly={locked} highlight={hasValue(mat.description)} />
-                <View style={styles.qtyRow}>
-                  <FormField labelEn="QTY" labelAr="الكمية" value={mat.qty}
-                    onChangeText={(v) => updateMaterial(mat.id, mat.description, v, mat.unit)}
-                    onBlur={refresh} readOnly={locked} style={{ flex: 1 }} />
-                  <FormField labelEn="Unit" labelAr="الوحدة" value={mat.unit ?? ''}
-                    onChangeText={(v) => updateMaterial(mat.id, mat.description, mat.qty, v)}
-                    onBlur={refresh} readOnly={locked} style={{ flex: 1 }} />
-                </View>
-                {!locked && report.materials.length > 1 && (
-                  <Button title="✕ حذف" variant="danger"
-                    onPress={() => { removeMaterialRow(mat.id, id!); refresh(); }} />
-                )}
-              </View>
+              <MaterialRow
+                key={mat.id}
+                mat={mat}
+                index={index}
+                locked={locked}
+                onDelete={() => { removeMaterialRow(mat.id, id!); refresh(); }}
+                showDelete={!locked && report.materials.length > 1}
+              />
             ))}
             {!locked && (
-              <Button title="إضافة مادة +" variant="secondary"
-                onPress={() => { addMaterialRow(id!); refresh(); }} />
+              <Button title="إضافة مادة +" variant="secondary" onPress={() => { addMaterialRow(id!); refresh(); }} />
             )}
           </>
         );
@@ -384,8 +432,8 @@ export default function ReportStepScreen() {
             {locked && <LockedBadge />}
             <Text style={styles.sectionTitle}>الملاحظات | Notes</Text>
             <FormField value={report.general_notes}
-              onChangeText={(v) => updateReport(id!, { general_notes: v })}
-              onBlur={refresh} readOnly={locked} multiline numberOfLines={8} style={styles.textArea} />
+              onDebouncedChange={(v) => { updateReport(id!, { general_notes: v }); refresh(); }}
+              readOnly={locked} multiline numberOfLines={8} style={styles.textArea} />
           </>
         );
 
@@ -404,8 +452,12 @@ export default function ReportStepScreen() {
               {report.photos.map((photo) => (
                 <View key={photo.id} style={styles.photoItem}>
                   <Image source={{ uri: photo.uri }} style={styles.photo} />
-                  <FormField value={photo.caption} onChangeText={(v) => updatePhotoCaption(photo.id, v)}
-                    onBlur={refresh} placeholder="تعليق..." readOnly={locked} />
+                  <FormField
+                    value={photo.caption}
+                    onDebouncedChange={(v) => updatePhotoCaption(photo.id, v)}
+                    onBlur={() => refresh()}
+                    placeholder="تعليق..." readOnly={locked}
+                  />
                   {!locked && (
                     <Button title="حذف" variant="danger" onPress={() => { deletePhoto(photo.id); refresh(); }} />
                   )}
@@ -420,33 +472,77 @@ export default function ReportStepScreen() {
           <>
             {locked && <LockedBadge />}
             <View style={styles.signatures}>
-              <View style={styles.sigColumn}>
-                <SignatureBlock label="توقيع الفني / Technician"
-                  readOnly={locked}
-                  existingSignature={report.signatures.find((s) => s.type === 'technician')?.image_base64}
-                  onSave={(sig) => {
-                    saveSignature(id!, 'technician', sig, techName || report.technician, new Date().toLocaleDateString());
-                    refresh();
-                  }} />
-                {!locked && (
-                  <FormField labelEn="Name" labelAr="الاسم" value={techName || report.technician}
-                    onChangeText={setTechName} />
+              <TouchableOpacity
+                style={[styles.sigButton, report.signatures.find(s => s.type === 'technician') && styles.sigButtonDone]}
+                onPress={() => !locked && setActiveSig('technician')}
+                disabled={locked}
+              >
+                <Text style={styles.sigButtonIcon}>{report.signatures.find(s => s.type === 'technician') ? '✅' : '✍️'}</Text>
+                <Text style={styles.sigButtonLabel}>توقيع الفني</Text>
+                <Text style={styles.sigButtonLabelEn}>Technician Signature</Text>
+                {report.signatures.find(s => s.type === 'technician') && (
+                  <Text style={styles.sigButtonSub}>{report.technician}</Text>
                 )}
-              </View>
-              <View style={styles.sigColumn}>
-                <SignatureBlock label="توقيع العميل / Customer"
-                  readOnly={locked}
-                  existingSignature={report.signatures.find((s) => s.type === 'client')?.image_base64}
-                  onSave={(sig) => {
-                    saveSignature(id!, 'client', sig, clientName, new Date().toLocaleDateString());
-                    refresh();
-                  }} />
-                {!locked && (
-                  <FormField labelEn="Name" labelAr="الاسم" value={clientName}
-                    onChangeText={setClientName} placeholder="مثال: Eng. Osama Alwaidh" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.sigButton, report.signatures.find(s => s.type === 'client') && styles.sigButtonDone]}
+                onPress={() => !locked && setActiveSig('client')}
+                disabled={locked}
+              >
+                <Text style={styles.sigButtonIcon}>{report.signatures.find(s => s.type === 'client') ? '✅' : '✍️'}</Text>
+                <Text style={styles.sigButtonLabel}>توقيع العميل</Text>
+                <Text style={styles.sigButtonLabelEn}>Customer Signature</Text>
+                {report.signatures.find(s => s.type === 'client') && (
+                  <Text style={styles.sigButtonSub}>{clientName}</Text>
                 )}
-              </View>
+              </TouchableOpacity>
             </View>
+
+            <Modal visible={activeSig !== null} animationType="slide" transparent>
+              <View style={styles.modalOverlay}>
+                <View style={styles.modalCard}>
+                  <Text style={styles.modalTitle}>
+                    {activeSig === 'technician' ? 'توقيع الفني / Technician' : 'توقيع العميل / Customer'}
+                  </Text>
+                  <FormField
+                    labelEn="Name" labelAr="الاسم"
+                    value={activeSig === 'technician' ? (techName || report.technician) : clientName}
+                    onDebouncedChange={activeSig === 'technician' ? setTechName : setClientName}
+                    placeholder={activeSig === 'client' ? 'مثال: Eng. Osama Alwaidh' : ''}
+                  />
+                  <View style={{ height: 260, width: '100%' }}>
+                    <SignatureBlock
+                      ref={sigRef}
+                      label=""
+                      onSave={(sig) => {
+                        if (!saveRequested.current) return;
+                        saveRequested.current = false;
+                        const name = activeSig === 'technician' ? (techName || report.technician) : clientName;
+                        saveSignature(id!, activeSig!, sig, name, new Date().toLocaleDateString());
+                        refresh();
+                      }}
+                    />
+                  </View>
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity style={styles.modalCancel} onPress={() => setActiveSig(null)}>
+                      <Text style={styles.modalCancelText}>إلغاء / Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.modalSave}
+                      onPress={() => {
+                        saveRequested.current = true;
+                        sigRef.current?.readSignature();
+                        setActiveSig(null);
+                      }}
+                    >
+                      <Text style={styles.modalSaveText}>حفظ / Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </Modal>
+
             {!locked && (
               <Button title="قفل وتصدير PDF" onPress={handleLockAndExport} variant="accent" loading={exporting} />
             )}
@@ -479,10 +575,14 @@ export default function ReportStepScreen() {
         {!locked && <Button title="حفظ مسودة" onPress={saveDraft} variant="primary" />}
         {step < TOTAL_STEPS && <Button title="التالي" onPress={goNext} variant="accent" />}
       </View>
-      <DropdownPicker visible={showMaintenancePicker} options={[...MAINTENANCE_TYPES]}
+      <DropdownPicker
+        visible={showMaintenancePicker}
+        options={[...MAINTENANCE_TYPES]}
         selected={report.maintenance_type}
         onSelect={(v) => { updateReport(id!, { maintenance_type: v as typeof report.maintenance_type }); refresh(); }}
-        onClose={() => setShowMaintenancePicker(false)} title="نوع الصيانة" />
+        onClose={() => setShowMaintenancePicker(false)}
+        title="نوع الصيانة"
+      />
     </View>
   );
 }
@@ -502,13 +602,26 @@ const styles = StyleSheet.create({
   customTitle: { fontSize: fontSize.md, fontWeight: '600', marginBottom: spacing.sm, textAlign: 'right' },
   attentionRow: { marginBottom: spacing.sm },
   materialRow: { marginBottom: spacing.md },
-  qtyRow: { flexDirection: 'row', gap: spacing.sm },
   highlightRow: { backgroundColor: colors.rowHighlight, borderRadius: 8, padding: spacing.xs },
   textArea: { minHeight: 140, textAlignVertical: 'top' },
   photoActions: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
   photoItem: { width: '47%' },
   photo: { width: '100%', height: 150, borderRadius: 8, marginBottom: spacing.xs },
-  signatures: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  signatures: { flexDirection: 'row', gap: spacing.md },
+  sigButton: { flex: 1, borderWidth: 1.5, borderColor: colors.border, borderRadius: 12, marginBottom: spacing.md, padding: spacing.md, alignItems: 'center', gap: 4, backgroundColor: colors.surface },
+  sigButtonDone: { borderColor: colors.accent },
+  sigButtonIcon: { fontSize: 28 },
+  sigButtonLabel: { fontSize: fontSize.sm, fontWeight: '700', color: colors.text },
+  sigButtonLabelEn: { fontSize: fontSize.sm, color: colors.textSecondary },
+  sigButtonSub: { fontSize: fontSize.sm, color: colors.accent, marginTop: 2 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end', padding: spacing.md },
+  modalCard: { backgroundColor: colors.background, borderRadius: 20, padding: spacing.lg, gap: spacing.md, marginBottom: 20 },
+  modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text, textAlign: 'center' },
   sigColumn: { flex: 1 },
+  modalActions: { flexDirection: 'row', gap: spacing.sm },
+  modalCancel: { flex: 1, paddingVertical: spacing.sm, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center' },
+  modalCancelText: { color: colors.textSecondary, fontWeight: '600', fontSize: fontSize.sm },
+  modalSave: { flex: 2, paddingVertical: spacing.sm, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center' },
+  modalSaveText: { color: '#FFFFFF', fontWeight: '700', fontSize: fontSize.sm },
 });

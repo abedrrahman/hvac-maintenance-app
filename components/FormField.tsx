@@ -1,12 +1,12 @@
-import React from 'react';
+import { colors, fontSize, spacing } from '@/constants/theme';
+import { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet,
-  Text,
   TextInput,
   TextInputProps,
   View,
+  ViewStyle
 } from 'react-native';
-import { colors, fontSize, spacing } from '@/constants/theme';
 import { BilingualLabel } from './BilingualLabel';
 
 interface Props extends TextInputProps {
@@ -14,6 +14,10 @@ interface Props extends TextInputProps {
   labelAr?: string;
   highlight?: boolean;
   readOnly?: boolean;
+  containerStyle?: ViewStyle;
+  onChangeText?: (v: string) => void;
+  onDebouncedChange?: (v: string) => void;
+  debounceMs?: number;
 }
 
 export function FormField({
@@ -22,24 +26,66 @@ export function FormField({
   highlight,
   readOnly,
   style,
+  containerStyle,
+  value,
+  onChangeText,
+  onBlur,
+  onDebouncedChange,
+  debounceMs = 2000,
   ...props
 }: Props) {
+  const [localValue, setLocalValue] = useState(value ?? '');
+  const debounceRef = useRef<any>(null);
+  const onDebouncedRef = useRef(onDebouncedChange);
+  onDebouncedRef.current = onDebouncedChange;
+
+  useEffect(() => {
+    setLocalValue(value ?? '');
+  }, [value]);
+
+  const handleChange = (e: any) => {
+    const text = e?.nativeEvent?.text ?? e?.target?.value ?? '';
+    setLocalValue(text);
+    onChangeText?.(text);
+
+    if (onDebouncedRef.current) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        onDebouncedRef.current?.(text);
+      }, debounceMs);
+    }
+  };
+
+  const handleBlur = (e: any) => {
+    // flush pending debounce immediately on blur
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    onDebouncedRef.current?.(localValue);
+    onBlur?.(e);
+  };
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, containerStyle]}>
       {labelEn && labelAr && (
         <BilingualLabel labelEn={labelEn} labelAr={labelAr} />
       )}
-      <TextInput
-        style={[
-          styles.input,
-          highlight && styles.highlight,
-          readOnly && styles.readOnly,
-          style,
-        ]}
-        placeholderTextColor={colors.textSecondary}
-        editable={!readOnly}
-        {...props}
-      />
+<TextInput
+  style={[
+    styles.input,
+    highlight && styles.highlight,
+    readOnly && styles.readOnly,
+    style,
+  ]}
+  placeholderTextColor={colors.textSecondary}
+  editable={!readOnly}
+  scrollEnabled={false}
+  value={localValue}
+  onChange={handleChange}
+  onBlur={handleBlur}
+  {...props}
+/>
     </View>
   );
 }
@@ -57,6 +103,8 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: colors.text,
     backgroundColor: colors.surface,
+    minHeight: 44,
+    flexShrink: 1,
   },
   highlight: {
     backgroundColor: colors.highlightBg,

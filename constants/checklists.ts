@@ -374,7 +374,7 @@ export function getChecklistTemplate(type: MachineType): ChecklistFieldDef[] {
   return CHECKLIST_TEMPLATES[type] ?? [];
 }
 
-export const DEFAULT_ATTENTION_ROWS = 8;
+export const DEFAULT_ATTENTION_ROWS = 1;
 
 export const FORM_STEPS = [
   { step: 1, title: 'Report Info', titleAr: 'معلومات التقرير' },

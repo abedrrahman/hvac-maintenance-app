@@ -1,3 +1,15 @@
+import { Button } from '@/components/Button';
+import { DropdownPicker } from '@/components/DropdownPicker';
+import { MAINTENANCE_TYPES } from '@/constants/company';
+import { MACHINE_TYPES, getMachineTypeInfo } from '@/constants/machineTypes';
+import { colors, fontSize, spacing } from '@/constants/theme';
+import { searchMachines } from '@/db/repositories/machines';
+import {
+  createReport,
+  getCustomChecklistTemplates,
+} from '@/db/repositories/reports';
+import { Machine, MachineType, MaintenanceType } from '@/types';
+import { loadGlobalUnits } from '@/utils/units';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -10,18 +22,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Button } from '@/components/Button';
-import { DropdownPicker } from '@/components/DropdownPicker';
-import { colors, fontSize, spacing } from '@/constants/theme';
-import { MAINTENANCE_TYPES } from '@/constants/company';
-import { MACHINE_TYPES, getMachineTypeInfo } from '@/constants/machineTypes';
-import { searchMachines } from '@/db/repositories/machines';
-import {
-  createReport,
-  getCustomChecklistTemplates,
-} from '@/db/repositories/reports';
-import { Machine, MachineType, MaintenanceType } from '@/types';
-import { loadGlobalUnits } from '@/utils/units';
 
 export default function NewReportScreen() {
   const router = useRouter();
@@ -89,7 +89,7 @@ export default function NewReportScreen() {
         placeholder="بحث بالاسم، الرقم التسلسلي، العميل..."
         placeholderTextColor={colors.textSecondary}
         value={query}
-        onChangeText={setQuery}
+        onDebouncedChange={setQuery}
         textAlign="right"
       />
 
