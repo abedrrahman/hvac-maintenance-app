@@ -519,8 +519,10 @@ export default function ReportStepScreen() {
                         if (!saveRequested.current) return;
                         saveRequested.current = false;
                         const name = activeSig === 'technician' ? (techName || report.technician) : clientName;
+                        console.log('✍️ Signature saved:', { type: activeSig, name, sigLength: sig.length });
                         saveSignature(id!, activeSig!, sig, name, new Date().toLocaleDateString());
                         refresh();
+                        setActiveSig(null); 
                       }}
                     />
                   </View>
@@ -533,7 +535,9 @@ export default function ReportStepScreen() {
                       onPress={() => {
                         saveRequested.current = true;
                         sigRef.current?.readSignature();
-                        setActiveSig(null);
+                        setTimeout(() => {
+                          setActiveSig(null);
+                        }, 300);
                       }}
                     >
                       <Text style={styles.modalSaveText}>حفظ / Save</Text>

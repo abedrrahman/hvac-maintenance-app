@@ -51,6 +51,7 @@ export function FormField({
     if (onDebouncedRef.current) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
+        console.log('💾 Debounced save:', text); // add this
         onDebouncedRef.current?.(text);
       }, debounceMs);
     }
@@ -62,6 +63,7 @@ export function FormField({
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
+    console.log('💾 Blur save:', localValue);
     onDebouncedRef.current?.(localValue);
     onBlur?.(e);
   };
@@ -71,21 +73,21 @@ export function FormField({
       {labelEn && labelAr && (
         <BilingualLabel labelEn={labelEn} labelAr={labelAr} />
       )}
-<TextInput
-  style={[
-    styles.input,
-    highlight && styles.highlight,
-    readOnly && styles.readOnly,
-    style,
-  ]}
-  placeholderTextColor={colors.textSecondary}
-  editable={!readOnly}
-  scrollEnabled={false}
-  value={localValue}
-  onChange={handleChange}
-  onBlur={handleBlur}
-  {...props}
-/>
+      <TextInput
+        style={[
+          styles.input,
+          highlight && styles.highlight,
+          readOnly && styles.readOnly,
+          style,
+        ]}
+        placeholderTextColor={colors.textSecondary}
+        editable={!readOnly}
+        scrollEnabled={false}
+        value={localValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        {...props}
+      />
     </View>
   );
 }

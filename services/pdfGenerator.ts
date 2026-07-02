@@ -1,13 +1,13 @@
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+import { getChecklistTemplate } from '@/constants/checklists';
 import { COMPANY } from '@/constants/company';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
-import { FullReport, ChecklistItem } from '@/types';
-import { hasValue } from '@/utils/helpers';
+import { ChecklistItem, FullReport } from '@/types';
 import { buildChillerChecklist, getVisibleCompressorFields } from '@/utils/chillerFields';
+import { hasValue } from '@/utils/helpers';
 import { pressureUnitLabel, tempUnitLabel } from '@/utils/units';
-import { getChecklistTemplate } from '@/constants/checklists';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Print from 'expo-print';
+
 
 const ACCENT = '#E8730A';
 const BORDER = '#333';
@@ -431,17 +431,44 @@ export async function generateReportHtml(report: FullReport): Promise<string> {
 }
 
 export async function exportReportPdf(report: FullReport): Promise<string> {
-  const html = await generateReportHtml(report);
-  const { uri } = await Print.printToFileAsync({ html, base64: false });
-  return uri;
+  try {
+    console.log('📄 Starting PDF export...');
+    const html = await generateReportHtml(report);
+    console.log('📄 HTML generated, length:', html.length);
+
+    // write HTML to a temp file in documentDirectory
+    const htmlFileName = `report_${Date.now()}.html`;
+    const htmlUri = `${FileSystem.documentDirectory}${htmlFileName}`;
+    await FileSystem.writeAsStringAsync(htmlUri, html, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+
+    // print from the HTML file URI
+    const pdfFileName = `ASEE_Report_${Date.now()}.pdf`;
+    const pdfUri = `${FileSystem.documentDirectory}${pdfFileName}`;
+
+    const { uri } = await Print.printToFileAsync({
+      html,
+      base64: false,
+    });
+
+    // delete temp html
+    await FileSystem.deleteAsync(htmlUri, { idempotent: true });
+
+    console.log('📄 PDF created at:', uri);
+    return uri;
+  } catch (error) {
+    console.error('📄 PDF export error:', error);
+    throw error;
+  }
 }
 
 export async function sharePdf(uri: string): Promise<void> {
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(uri, {
-      mimeType: 'application/pdf',
-      dialogTitle: 'Export Maintenance Report',
-      UTI: 'com.adobe.pdf',
-    });
+  try {
+    // fallback: open native print dialog
+    await Print.printAsync({ uri });
+  } catch (error) {
+    console.error('📄 Print error:', error);
+    throw error;
   }
 }
