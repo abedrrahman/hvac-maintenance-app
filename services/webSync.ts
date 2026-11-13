@@ -6,6 +6,7 @@
  * The app keeps working with no connection; anything that fails is tried again on the next sync.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File } from 'expo-file-system';
 import { replaceAlarms } from '@/db/repositories/alarms';
 import { getMachineById, getWebMachineKeys, upsertWebMachine } from '@/db/repositories/machines';
 import {
@@ -127,9 +128,9 @@ function cleanBaseUrl(text: string): string {
   return /^https?:\/\//i.test(url) ? url : `https://${url}`;
 }
 
-async function request(url: string, init: RequestInit): Promise<Response> {
+async function request(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
@@ -266,11 +267,6 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
   return data.units.length;
 }
 
-function fileName(uri: string, fallback: string): string {
-  const name = uri.split('/').pop() ?? '';
-  return name.includes('.') ? name : fallback;
-}
-
 async function uploadReport(link: WebLink, reportId: string): Promise<void> {
   const full = getFullReport(reportId);
   if (!full) return;
@@ -288,16 +284,15 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
     }),
   );
   const pdfUri = await exportReportPdf(full);
-  form.append('pdf', { uri: pdfUri, name: `ASEE_Report_${reportId}.pdf`, type: 'application/pdf' } as never);
-  photos.forEach((p, i) => {
-    form.append('photo', { uri: p.uri, name: fileName(p.uri, `photo_${i + 1}.jpg`), type: 'image/jpeg' } as never);
-  });
+  // Expo's fetch refuses React Native's { uri } parts ("Unsupported FormDataPart implementation"); its File carries name, type and bytes.
+  form.append('pdf', new File(pdfUri) as never);
+  photos.forEach((p) => form.append('photo', new File(p.uri) as never));
 
   const response = await request(`${link.baseUrl}/api/reports/`, {
     method: 'POST',
     headers: { Authorization: `Token ${link.token}` },
     body: form,
-  });
+  }, 120000); // a PDF plus photos on mobile data needs longer than the 30 s used for small requests
   if ([400, 403, 404].includes(response.status)) throw new RefusedError(await errorText(response));
   if (!response.ok) throw new Error(await errorText(response));
 }
