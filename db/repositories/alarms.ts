@@ -7,15 +7,21 @@ export interface Alarm {
   name_en: string;
   name_ar: string;
   causes_en: string;
+  causes_ar: string;
   checks_en: string;
+  checks_ar: string;
   effect_en: string;
+  effect_ar: string;
   action_en: string;
+  action_ar: string;
   reset_en: string;
+  reset_ar: string;
 }
 
 const COLUMNS = [
   'code', 'key', 'controller', 'name_en', 'name_ar',
-  'causes_en', 'checks_en', 'effect_en', 'action_en', 'reset_en',
+  'causes_en', 'causes_ar', 'checks_en', 'checks_ar', 'effect_en', 'effect_ar',
+  'action_en', 'action_ar', 'reset_en', 'reset_ar',
 ] as const;
 
 /** Letters and digits only, like the website: "D4.1", "d4 1" and "d41" are the same code. */
@@ -65,9 +71,9 @@ export function searchAlarms(text: string, limit = 30): Alarm[] {
   const words = typed.split(/\s+/).filter((w) => w.length >= 2).slice(0, 6);
   if (words.length === 0) return [];
   const where = words
-    .map(() => '(code LIKE ? OR name_en LIKE ? OR name_ar LIKE ? OR causes_en LIKE ?)')
+    .map(() => '(code LIKE ? OR name_en LIKE ? OR name_ar LIKE ? OR causes_en LIKE ? OR causes_ar LIKE ?)')
     .join(' AND ');
-  const params = words.flatMap((w) => Array(4).fill(`%${w}%`) as string[]);
+  const params = words.flatMap((w) => Array(5).fill(`%${w}%`) as string[]);
   return db.getAllSync<Alarm>(
     `SELECT * FROM alarms WHERE ${where} ORDER BY LENGTH(name_en) LIMIT ?`,
     [...params, limit],

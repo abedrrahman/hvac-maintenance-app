@@ -197,10 +197,15 @@ function migrateV3(db: SQLite.SQLiteDatabase): void {
       name_en TEXT DEFAULT '',
       name_ar TEXT DEFAULT '',
       causes_en TEXT DEFAULT '',
+      causes_ar TEXT DEFAULT '',
       checks_en TEXT DEFAULT '',
+      checks_ar TEXT DEFAULT '',
       effect_en TEXT DEFAULT '',
+      effect_ar TEXT DEFAULT '',
       action_en TEXT DEFAULT '',
-      reset_en TEXT DEFAULT ''
+      action_ar TEXT DEFAULT '',
+      reset_en TEXT DEFAULT '',
+      reset_ar TEXT DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_alarms_key ON alarms(key);
   `);

@@ -71,8 +71,8 @@ export default function AlarmsScreen() {
               <Text style={styles.code}>{a.code}</Text>
               <Text style={styles.name}>{a.name}</Text>
               <Text style={styles.meta}>{a.controllers.join('، ')}</Text>
-              {a.effect ? <Row label="ماذا تفعل الوحدة" value={a.effect} /> : null}
-              {a.causes ? <Row label="الأسباب المحتملة" value={a.causes} /> : null}
+              <Row label="ماذا تفعل الوحدة" ar={a.effect} />
+              <Row label="الأسباب المحتملة" ar={a.causes} />
               {a.steps.map((s, n) => (
                 <Text key={n} style={styles.step}>
                   {n + 1}. {s.label}: {s.text}
@@ -111,22 +111,24 @@ export default function AlarmsScreen() {
           <Text style={styles.name}>{a.name_ar || a.name_en}</Text>
           {a.name_ar ? <Text style={styles.meta}>{a.name_en}</Text> : null}
           <Text style={styles.meta}>{a.controller}</Text>
-          {a.effect_en && a.effect_en.toLowerCase() !== 'none' ? <Row label="Effect" value={a.effect_en} /> : null}
-          {a.causes_en ? <Row label="Causes" value={a.causes_en} /> : null}
-          {a.checks_en ? <Row label="Checks" value={a.checks_en} /> : null}
-          {a.action_en ? <Row label="Action" value={a.action_en} /> : null}
-          {a.reset_en ? <Row label="Reset" value={a.reset_en} /> : null}
+          {a.effect_en.toLowerCase() !== 'none' ? <Row label="ماذا تفعل الوحدة" ar={a.effect_ar} en={a.effect_en} /> : null}
+          <Row label="الأسباب المحتملة" ar={a.causes_ar} en={a.causes_en} />
+          <Row label="الفحوصات" ar={a.checks_ar} en={a.checks_en} />
+          <Row label="الإجراء" ar={a.action_ar} en={a.action_en} />
+          <Row label="إعادة الضبط" ar={a.reset_ar} en={a.reset_en} />
         </View>
       ))}
     </ScrollView>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+/** Arabic when the manual text has been translated, otherwise the English original. Nothing at all when both are empty. */
+function Row({ label, ar, en = '' }: { label: string; ar: string; en?: string }) {
+  if (!ar && !en) return null;
   return (
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
-      <Text style={styles.value}>{value}</Text>
+      <Text style={ar ? styles.valueAr : styles.value}>{ar || en}</Text>
     </View>
   );
 }
@@ -164,7 +166,8 @@ const styles = StyleSheet.create({
   name: { fontSize: fontSize.md, fontWeight: '700', color: colors.text, textAlign: 'right', marginTop: 2 },
   meta: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'right', marginTop: 2 },
   row: { marginTop: spacing.sm },
-  label: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textSecondary, textAlign: 'left' },
+  label: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textSecondary, textAlign: 'right' },
   value: { fontSize: fontSize.md, color: colors.text, textAlign: 'left' },
+  valueAr: { fontSize: fontSize.md, color: colors.text, textAlign: 'right' },
   step: { fontSize: fontSize.md, color: colors.text, textAlign: 'right', marginTop: spacing.xs },
 });
