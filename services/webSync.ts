@@ -6,7 +6,7 @@
  * The app keeps working with no connection; anything that fails is tried again on the next sync.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getMachineById, upsertWebMachine } from '@/db/repositories/machines';
+import { getMachineById, getWebMachineKeys, upsertWebMachine } from '@/db/repositories/machines';
 import {
   getFullReport,
   getReportsToUpload,
@@ -26,6 +26,22 @@ export interface WebLink {
   userName: string;
   lastSync: string | null;
   machineCount: number;
+  /** Off: locked reports wait until the user presses "Sync now". Missing means on. */
+  autoUpload?: boolean;
+  /** Sites and units that appeared on the website since the user last looked. */
+  newSites?: string[];
+  newUnits?: number;
+}
+
+export async function setAutoUpload(on: boolean): Promise<void> {
+  const link = await loadWebLink();
+  if (link) await saveWebLink({ ...link, autoUpload: on });
+}
+
+/** The user has seen the "new sites" notice. */
+export async function clearNewSites(): Promise<void> {
+  const link = await loadWebLink();
+  if (link) await saveWebLink({ ...link, newSites: [], newUnits: 0 });
 }
 
 export interface SyncResult {
@@ -144,6 +160,12 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
   if (!response.ok) throw new Error(await errorText(response));
   const data = (await response.json()) as SyncPayload;
 
+  // What is new since the last download. The very first download is not "new": everything arrives at once.
+  const known = getWebMachineKeys();
+  const knownIds = new Set(known.map((k) => k.web_id));
+  const knownSites = new Set(known.map((k) => k.client_name));
+  const first = known.length === 0;
+
   const clients = new Map(data.clients.map((c) => [c.id, c]));
   const documents = new Map(data.documents.map((d) => [d.id, d]));
   const nextVisit = new Map<number, number>(); // visits arrive oldest first: keep the first per unit
@@ -173,10 +195,19 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
     });
   });
 
+  const addedUnits = first ? [] : data.units.filter((u) => !knownIds.has(u.id));
+  const addedSites = new Set(
+    addedUnits
+      .map((u) => clients.get(u.client_id)?.name_en ?? '')
+      .filter((name) => name && !knownSites.has(name)),
+  );
+  const current = (await loadWebLink()) ?? link; // keep a switch the user changed while this download ran
   await saveWebLink({
-    ...link,
+    ...current,
     lastSync: new Date().toISOString(),
     machineCount: data.units.length,
+    newSites: [...new Set([...(current.newSites ?? []), ...addedSites])],
+    newUnits: (current.newUnits ?? 0) + addedUnits.length,
   });
   return data.units.length;
 }
@@ -220,7 +251,7 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
 let running = false;
 
 /** Uploads waiting reports, then refreshes the site data. Safe to call often: it does nothing while a sync is already running. */
-export async function syncNow(options: { download?: boolean; retryRefused?: boolean } = {}): Promise<SyncResult> {
+export async function syncNow(options: { download?: boolean; manual?: boolean } = {}): Promise<SyncResult> {
   const link = await loadWebLink();
   if (!link) return { ok: false, message: 'not signed in', uploaded: 0, waiting: getReportsToUpload().length };
   if (running) return { ok: true, message: 'already running', uploaded: 0, waiting: getReportsToUpload().length };
@@ -234,9 +265,11 @@ export async function syncNow(options: { download?: boolean; retryRefused?: bool
     } catch {
       return { ok: false, message: 'offline', uploaded: 0, waiting: getReportsToUpload().length };
     }
-    for (const report of getReportsToUpload()) {
+    // With automatic upload switched off, reports leave the phone only when the user presses "Sync now".
+    const mayUpload = options.manual || link.autoUpload !== false;
+    for (const report of mayUpload ? getReportsToUpload() : []) {
       // A refused report waits for the user ("Sync now" in Settings), so the phone does not rebuild its PDF every minute.
-      if (report.upload_error && !options.retryRefused) continue;
+      if (report.upload_error && !options.manual) continue;
       try {
         await uploadReport(link, report.id);
         markReportUploaded(report.id);

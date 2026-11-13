@@ -33,6 +33,13 @@ function rowToMachine(row: Record<string, unknown>): Machine {
   };
 }
 
+/** What the phone already holds from the website, so a download can tell which sites and units are new. */
+export function getWebMachineKeys(): { web_id: number; client_name: string }[] {
+  return getDatabase().getAllSync<{ web_id: number; client_name: string }>(
+    'SELECT web_id, client_name FROM machines WHERE web_id IS NOT NULL',
+  );
+}
+
 /** One unit from the website's download. Updates the machine it matches, or adds it. Hand-typed details (capacity, year) are kept. */
 export function upsertWebMachine(data: {
   web_id: number;

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Button } from '@/components/Button';
 import { FormField } from '@/components/FormField';
 import { UnitsSelector } from '@/components/UnitsSelector';
@@ -9,6 +9,7 @@ import { getReportsToUpload } from '@/db/repositories/reports';
 import {
   WebLink,
   loadWebLink,
+  setAutoUpload,
   signIn,
   signOut,
   syncNow,
@@ -71,7 +72,7 @@ export default function SettingsScreen() {
   const handleSync = async () => {
     setBusy(true);
     try {
-      const result = await syncNow({ download: true, retryRefused: true });
+      const result = await syncNow({ download: true, manual: true });
       await refresh();
       Alert.alert(
         result.ok ? 'تمت المزامنة' : 'لم تكتمل المزامنة',
@@ -116,6 +117,22 @@ export default function SettingsScreen() {
           <Text style={[styles.line, waiting > 0 && styles.waiting]}>
             تقارير بانتظار الرفع: {waiting}
           </Text>
+          <View style={styles.switchRow}>
+            <Switch
+              value={link.autoUpload !== false}
+              onValueChange={async (on) => {
+                await setAutoUpload(on);
+                await refresh();
+              }}
+              trackColor={{ true: colors.brand, false: colors.border }}
+            />
+            <View style={styles.switchText}>
+              <Text style={styles.line}>رفع التقارير تلقائياً</Text>
+              <Text style={styles.small}>
+                عند التشغيل يُرفع كل تقرير مقفل إلى الموقع فور توفر الإنترنت. عند الإيقاف يُرفع فقط عند الضغط على «مزامنة الآن».
+              </Text>
+            </View>
+          </View>
           <Button title="مزامنة الآن" onPress={handleSync} variant="accent" loading={busy} />
           <Button title="فصل الربط" onPress={handleSignOut} variant="secondary" />
         </View>
@@ -188,4 +205,6 @@ const styles = StyleSheet.create({
   line: { fontSize: fontSize.md, color: colors.text, textAlign: 'right' },
   small: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'right' },
   waiting: { color: colors.accent, fontWeight: '700' },
+  switchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  switchText: { flex: 1 },
 });

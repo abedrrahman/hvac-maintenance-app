@@ -7,7 +7,7 @@ export default function ReportLayout() {
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: colors.primary },
+        headerStyle: { backgroundColor: colors.brand },
         headerTintColor: '#FFFFFF',
         headerTitleStyle: { fontWeight: '700' },
         contentStyle: { backgroundColor: colors.background },

@@ -12,12 +12,16 @@ export { ErrorBoundary } from 'expo-router';
 SplashScreen.preventAutoHideAsync();
 
 const SYNC_EVERY_MS = 60000;
+const CHECK_SITES_EVERY_TICKS = 15;
 
 /** Sends waiting reports to the website whenever a connection is there: at start, each minute, and when the app is reopened. */
 function AutoSync() {
   useEffect(() => {
+    let ticks = 0;
     const upload = () => {
-      syncNow().catch(() => {});
+      ticks += 1;
+      // Every 15 minutes also ask the website whether sites or units were added.
+      syncNow({ download: ticks % CHECK_SITES_EVERY_TICKS === 0 }).catch(() => {});
     };
     syncNow({ download: true }).catch(() => {});
     const timer = setInterval(upload, SYNC_EVERY_MS);
@@ -42,7 +46,7 @@ export default function RootLayout() {
       <AutoSync />
       <Stack
         screenOptions={{
-          headerStyle: { backgroundColor: colors.primary },
+          headerStyle: { backgroundColor: colors.brand },
           headerTintColor: colors.textLight,
           headerTitleStyle: { fontWeight: '700' },
           contentStyle: { backgroundColor: colors.background },

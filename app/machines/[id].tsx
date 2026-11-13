@@ -122,7 +122,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.brand,
     padding: spacing.lg,
   },
   title: {
