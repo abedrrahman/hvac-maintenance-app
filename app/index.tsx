@@ -42,7 +42,7 @@ export default function HomeScreen() {
           placeholder="بحث..."
           placeholderTextColor={colors.textSecondary}
           value={search}
-          onDebouncedChange={handleSearch}
+          onChangeText={handleSearch}
           textAlign="right"
         />
       </View>

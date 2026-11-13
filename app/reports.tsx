@@ -71,7 +71,7 @@ export default function ReportsListScreen() {
           placeholder="بحث..."
           placeholderTextColor={colors.textSecondary}
           value={search}
-          onDebouncedChange={setSearch}
+          onChangeText={setSearch}
           textAlign="right"
         />
         <Pressable

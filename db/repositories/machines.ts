@@ -25,7 +25,55 @@ function rowToMachine(row: Record<string, unknown>): Machine {
     location: (row.location as string) ?? '',
     installation_year: (row.installation_year as string) ?? '',
     created_at: row.created_at as string,
+    web_id: (row.web_id as number) ?? null,
+    name: (row.name as string) ?? '',
+    project: (row.project as string) ?? '',
+    web_documents: (row.web_documents as string) ?? '[]',
+    web_visit_id: (row.web_visit_id as number) ?? null,
   };
+}
+
+/** One unit from the website's download. Updates the machine it matches, or adds it. Hand-typed details (capacity, year) are kept. */
+export function upsertWebMachine(data: {
+  web_id: number;
+  type: MachineType;
+  name: string;
+  brand: string;
+  model: string;
+  serial_number: string;
+  client_name: string;
+  site: string;
+  location: string;
+  project: string;
+  web_documents: string;
+  web_visit_id: number | null;
+}): void {
+  const db = getDatabase();
+  const existing = db.getFirstSync<{ id: string }>(
+    'SELECT id FROM machines WHERE web_id = ?',
+    [data.web_id],
+  );
+  if (existing) {
+    db.runSync(
+      `UPDATE machines SET name=?, brand=?, model=?, serial_number=?, client_name=?, site=?,
+       location=?, project=?, web_documents=?, web_visit_id=? WHERE id=?`,
+      [
+        data.name, data.brand, data.model, data.serial_number, data.client_name, data.site,
+        data.location, data.project, data.web_documents, data.web_visit_id, existing.id,
+      ],
+    );
+    return;
+  }
+  db.runSync(
+    `INSERT INTO machines (id, type, name, brand, model, serial_number, client_name, site,
+     location, project, web_documents, web_visit_id, web_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      generateId(), data.type, data.name, data.brand, data.model, data.serial_number,
+      data.client_name, data.site, data.location, data.project, data.web_documents,
+      data.web_visit_id, data.web_id, new Date().toISOString(),
+    ],
+  );
 }
 
 function rowToTemplate(row: Record<string, unknown>): MachineTemplate {
@@ -120,9 +168,9 @@ export function getAllMachines(filters?: MachineFilters): Machine[] {
 
   if (filters?.search) {
     query +=
-      ' AND (client_name LIKE ? OR model LIKE ? OR serial_number LIKE ? OR site LIKE ? OR brand LIKE ?)';
+      ' AND (client_name LIKE ? OR model LIKE ? OR serial_number LIKE ? OR site LIKE ? OR brand LIKE ? OR name LIKE ? OR project LIKE ?)';
     const term = `%${filters.search}%`;
-    params.push(term, term, term, term, term);
+    params.push(term, term, term, term, term, term, term);
   }
 
   query += ' ORDER BY created_at DESC';

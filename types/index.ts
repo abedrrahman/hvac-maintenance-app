@@ -52,6 +52,18 @@ export interface Machine {
   location: string;
   installation_year: string;
   created_at: string;
+  /** From the ASEE website. web_id is empty for machines typed in by hand. */
+  web_id: number | null;
+  name: string;
+  project: string;
+  web_documents: string;
+  web_visit_id: number | null;
+}
+
+export interface WebDocument {
+  name: string;
+  type: string;
+  url: string;
 }
 
 export interface CustomChecklistRowTemplate {
@@ -102,6 +114,9 @@ export interface Report {
   pressure_unit: PressureUnit;
   created_at: string;
   updated_at: string;
+  /** When the locked report reached the website; empty while it waits for a connection. */
+  uploaded_at: string | null;
+  upload_error: string;
 }
 
 export interface ChecklistItem {
