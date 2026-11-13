@@ -60,6 +60,7 @@ export default function RootLayout() {
         />
         <Stack.Screen name="machines/[id]" options={{ title: 'تفاصيل المعدة' }} />
         <Stack.Screen name="settings" options={{ title: 'الإعدادات' }} />
+        <Stack.Screen name="alarms" options={{ title: 'البحث عن الإنذارات' }} />
         <Stack.Screen
           name="custom-templates"
           options={{ title: 'قوالب القائمة المخصصة' }}

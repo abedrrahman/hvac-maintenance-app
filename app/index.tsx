@@ -120,6 +120,11 @@ export default function HomeScreen() {
           onPress={() => router.push('/reports')}
         />
         <MenuButton
+          title="البحث عن الإنذارات"
+          subtitle="رمز الإنذار أو وصف المشكلة — يعمل بدون إنترنت"
+          onPress={() => router.push('/alarms' as never)}
+        />
+        <MenuButton
           title="المعدات المحفوظة"
           subtitle="قاعدة بيانات المعدات"
           onPress={() => router.push('/machines/index' as never)}

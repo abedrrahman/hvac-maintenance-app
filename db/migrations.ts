@@ -188,6 +188,22 @@ function migrateV3(db: SQLite.SQLiteDatabase): void {
   add('reports', 'uploaded_at', 'TEXT');
   add('reports', 'upload_error', "TEXT DEFAULT ''");
   db.execSync('CREATE INDEX IF NOT EXISTS idx_machines_web ON machines(web_id)');
+  // The website's alarm list, kept on the phone so codes can be looked up with no signal.
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS alarms (
+      code TEXT NOT NULL,
+      key TEXT NOT NULL,
+      controller TEXT DEFAULT '',
+      name_en TEXT DEFAULT '',
+      name_ar TEXT DEFAULT '',
+      causes_en TEXT DEFAULT '',
+      checks_en TEXT DEFAULT '',
+      effect_en TEXT DEFAULT '',
+      action_en TEXT DEFAULT '',
+      reset_en TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_alarms_key ON alarms(key);
+  `);
 }
 
 export function runMigrations(db: SQLite.SQLiteDatabase): void {

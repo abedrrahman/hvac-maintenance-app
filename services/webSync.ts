@@ -6,6 +6,7 @@
  * The app keeps working with no connection; anything that fails is tried again on the next sync.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { replaceAlarms } from '@/db/repositories/alarms';
 import { getMachineById, getWebMachineKeys, upsertWebMachine } from '@/db/repositories/machines';
 import {
   getFullReport,
@@ -31,6 +32,59 @@ export interface WebLink {
   /** Sites and units that appeared on the website since the user last looked. */
   newSites?: string[];
   newUnits?: number;
+  /** Which alarm list the phone holds, so the website sends it again only when it changed. */
+  alarmVersion?: string;
+}
+
+/** Brings the website's alarm list onto the phone (about 1 MB, only when it changed). */
+async function downloadAlarms(link: WebLink): Promise<void> {
+  const have = encodeURIComponent(link.alarmVersion ?? '');
+  const response = await request(`${link.baseUrl}/api/alarms/?have=${have}`, {
+    headers: { Authorization: `Token ${link.token}` },
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  const data = (await response.json()) as { version: string; fields?: string[]; alarms: unknown[][] | null };
+  if (!data.alarms || !data.fields) return;
+  replaceAlarms(data.fields, data.alarms);
+  const current = (await loadWebLink()) ?? link;
+  await saveWebLink({ ...current, alarmVersion: data.version });
+}
+
+export interface BotAlarm {
+  code: string;
+  name: string;
+  controllers: string[];
+  effect: string;
+  causes: string;
+  note: string;
+  steps: { label: string; text: string }[];
+  source: { name: string; page: number };
+}
+
+export interface BotAnswer {
+  text: string;
+  alarms?: BotAlarm[];
+  passages?: { snippet: string; source: { name: string; page: number } }[];
+}
+
+const BOT_TIMEOUT_MS = 8000;
+
+/** Asks the website's Alarm Lookup assistant. Needs a connection; gives up after 8 seconds so the screen never hangs. */
+export async function askAlarmBot(question: string): Promise<BotAnswer> {
+  const link = await loadWebLink();
+  if (!link) throw new Error('not signed in');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BOT_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${link.baseUrl}/api/alarms/ask/?lang=ar&q=${encodeURIComponent(question)}`,
+      { headers: { Authorization: `Token ${link.token}` }, signal: controller.signal },
+    );
+    if (!response.ok) throw new Error(await errorText(response));
+    return (await response.json()) as BotAnswer;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function setAutoUpload(on: boolean): Promise<void> {
@@ -283,6 +337,7 @@ export async function syncNow(options: { download?: boolean; manual?: boolean } 
     if (options.download) {
       try {
         await downloadSiteData(link);
+        await downloadAlarms((await loadWebLink()) ?? link);
       } catch (error) {
         message = error instanceof Error ? error.message : String(error);
       }
