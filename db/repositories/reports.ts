@@ -52,7 +52,33 @@ function rowToReport(row: Record<string, unknown>): Report {
     pressure_unit: (row.pressure_unit as PressureUnit) ?? 'bar',
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
+    uploaded_at: (row.uploaded_at as string) ?? null,
+    upload_error: (row.upload_error as string) ?? '',
   };
+}
+
+/** Locked reports that have not reached the website yet, oldest first. */
+export function getReportsToUpload(): Report[] {
+  const db = getDatabase();
+  return db
+    .getAllSync<Record<string, unknown>>(
+      "SELECT * FROM reports WHERE status = 'locked' AND uploaded_at IS NULL ORDER BY updated_at",
+    )
+    .map(rowToReport);
+}
+
+export function markReportUploaded(id: string): void {
+  getDatabase().runSync(
+    "UPDATE reports SET uploaded_at = ?, upload_error = '' WHERE id = ?",
+    [new Date().toISOString(), id],
+  );
+}
+
+export function markReportUploadError(id: string, message: string): void {
+  getDatabase().runSync('UPDATE reports SET upload_error = ? WHERE id = ?', [
+    message.slice(0, 300),
+    id,
+  ]);
 }
 
 export interface CreateReportOptions {

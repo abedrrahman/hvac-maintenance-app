@@ -35,7 +35,7 @@ export default function MachinesListScreen() {
         placeholder="بحث بالعميل، الموديل، الرقم التسلسلي..."
         placeholderTextColor={colors.textSecondary}
         value={search}
-        onDebouncedChange={setSearch}
+        onChangeText={setSearch}
         textAlign="right"
       />
       <FlatList
@@ -50,7 +50,7 @@ export default function MachinesListScreen() {
             style={styles.card}
             onPress={() => router.push(`/machines/${item.id}` as never)}>
             <Text style={styles.model}>
-              {item.model || item.serial_number || 'معدة بدون اسم'}
+              {item.name || item.model || item.serial_number || 'معدة بدون اسم'}
             </Text>
             <Text style={styles.type}>
               {getMachineTypeInfo(item.type).labelAr}

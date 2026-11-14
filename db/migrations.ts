@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 
 function columnExists(
   db: SQLite.SQLiteDatabase,
@@ -119,9 +119,6 @@ function migrateV1(db: SQLite.SQLiteDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_photos_report ON photos(report_id);
     CREATE INDEX IF NOT EXISTS idx_signatures_report ON signatures(report_id);
   `);
-    db.execSync(`
-    CREATE INDEX IF NOT EXISTS idx_reports_machine ON reports(machine_id);
-  `);
 }
 
 function migrateV2(db: SQLite.SQLiteDatabase): void {
@@ -172,6 +169,46 @@ function migrateV2(db: SQLite.SQLiteDatabase): void {
   if (!columnExists(db, 'materials', 'unit')) {
     db.execSync("ALTER TABLE materials ADD COLUMN unit TEXT DEFAULT ''");
   }
+  // After the column exists: creating this index in V1 failed on a fresh install.
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_machine ON reports(machine_id)');
+}
+
+// V3: link to the ASEE website. Machines remember their website unit; reports remember whether they were uploaded.
+function migrateV3(db: SQLite.SQLiteDatabase): void {
+  const add = (table: string, column: string, type: string) => {
+    if (!columnExists(db, table, column)) {
+      db.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  };
+  add('machines', 'web_id', 'INTEGER');
+  add('machines', 'name', "TEXT DEFAULT ''");
+  add('machines', 'project', "TEXT DEFAULT ''");
+  add('machines', 'web_documents', "TEXT DEFAULT '[]'");
+  add('machines', 'web_visit_id', 'INTEGER');
+  add('reports', 'uploaded_at', 'TEXT');
+  add('reports', 'upload_error', "TEXT DEFAULT ''");
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_machines_web ON machines(web_id)');
+  // The website's alarm list, kept on the phone so codes can be looked up with no signal.
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS alarms (
+      code TEXT NOT NULL,
+      key TEXT NOT NULL,
+      controller TEXT DEFAULT '',
+      name_en TEXT DEFAULT '',
+      name_ar TEXT DEFAULT '',
+      causes_en TEXT DEFAULT '',
+      causes_ar TEXT DEFAULT '',
+      checks_en TEXT DEFAULT '',
+      checks_ar TEXT DEFAULT '',
+      effect_en TEXT DEFAULT '',
+      effect_ar TEXT DEFAULT '',
+      action_en TEXT DEFAULT '',
+      action_ar TEXT DEFAULT '',
+      reset_en TEXT DEFAULT '',
+      reset_ar TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_alarms_key ON alarms(key);
+  `);
 }
 
 export function runMigrations(db: SQLite.SQLiteDatabase): void {
@@ -185,6 +222,11 @@ export function runMigrations(db: SQLite.SQLiteDatabase): void {
   if (getSchemaVersion(db) < 2) {
     migrateV2(db);
     setSchemaVersion(db, 2);
+  }
+
+  if (getSchemaVersion(db) < 3) {
+    migrateV3(db);
+    setSchemaVersion(db, 3);
   }
 
   if (getSchemaVersion(db) < CURRENT_VERSION) {

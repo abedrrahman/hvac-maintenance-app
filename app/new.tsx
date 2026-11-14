@@ -37,7 +37,7 @@ export default function NewReportScreen() {
 
   useEffect(() => {
     if (query.trim().length >= 1) {
-      setMachines(searchMachines(query.trim()));
+      setMachines(searchMachines(query.trim()).slice(0, 30)); // the website list holds hundreds of units
     } else {
       setMachines([]);
     }
@@ -89,7 +89,7 @@ export default function NewReportScreen() {
         placeholder="بحث بالاسم، الرقم التسلسلي، العميل..."
         placeholderTextColor={colors.textSecondary}
         value={query}
-        onDebouncedChange={setQuery}
+        onChangeText={setQuery}
         textAlign="right"
       />
 
@@ -108,7 +108,7 @@ export default function NewReportScreen() {
                 setMachines([]);
               }}>
               <Text style={styles.machineTitle}>
-                {item.model || item.serial_number}
+                {item.name || item.model || item.serial_number}
               </Text>
               <Text style={styles.machineSub}>
                 {item.client_name} — {item.site}
@@ -133,7 +133,7 @@ export default function NewReportScreen() {
         <View style={styles.selectedBox}>
           <Text style={styles.selectedTitle}>✓ معدة محددة</Text>
           <Text style={styles.selectedText}>
-            {selectedMachine.model} — {selectedMachine.client_name}
+            {selectedMachine.name || selectedMachine.model} — {selectedMachine.client_name}
           </Text>
           <Pressable onPress={() => setSelectedMachine(null)}>
             <Text style={styles.changeLink}>تغيير</Text>

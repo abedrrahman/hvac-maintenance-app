@@ -39,6 +39,15 @@ export function ReportCard({ report, onPress, onLongPress }: Props) {
         <Text style={styles.date}>{formatDisplayDate(report.date)}</Text>
         <Text style={styles.maintenance}>{report.maintenance_type}</Text>
       </View>
+      {isLocked && (
+        <Text style={[styles.upload, report.uploaded_at ? styles.uploaded : null]}>
+          {report.uploaded_at
+            ? '✓ تم الرفع إلى الموقع'
+            : report.upload_error
+              ? `لم يُرفع: ${report.upload_error}`
+              : 'بانتظار الرفع إلى الموقع'}
+        </Text>
+      )}
     </Pressable>
   );
 }
@@ -121,5 +130,14 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.accent,
     fontWeight: '600',
+  },
+  upload: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'right',
+    marginTop: spacing.xs,
+  },
+  uploaded: {
+    color: colors.success,
   },
 });

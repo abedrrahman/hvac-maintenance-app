@@ -1,16 +1,18 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
+  Alert,
   FlatList,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import { getMachineById } from '@/db/repositories/machines';
+import { getMachineById, parseTemplateJson } from '@/db/repositories/machines';
 import { getReportsByMachineId } from '@/db/repositories/reports';
-import { Machine, Report } from '@/types';
+import { Machine, Report, WebDocument } from '@/types';
 import { formatDisplayDate } from '@/utils/helpers';
 
 export default function MachineDetailScreen() {
@@ -31,6 +33,10 @@ export default function MachineDetailScreen() {
     }, [load]),
   );
 
+  const documents = machine
+    ? parseTemplateJson<WebDocument[]>(machine.web_documents, [])
+    : [];
+
   if (!machine) {
     return (
       <View style={styles.center}>
@@ -42,8 +48,12 @@ export default function MachineDetailScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>{machine.model || 'معدة'}</Text>
+        <Text style={styles.title}>{machine.name || machine.model || 'معدة'}</Text>
+        {machine.name ? <Text style={styles.sub}>{machine.model}</Text> : null}
         <Text style={styles.sub}>{machine.client_name} — {machine.site}</Text>
+        {machine.project ? (
+          <Text style={styles.sub}>المشروع: {machine.project}</Text>
+        ) : null}
         {machine.serial_number ? (
           <Text style={styles.sub}>S/N: {machine.serial_number}</Text>
         ) : null}
@@ -54,6 +64,25 @@ export default function MachineDetailScreen() {
           <Text style={styles.sub}>السعة: {machine.capacity}</Text>
         ) : null}
       </View>
+
+      {documents.length > 0 && (
+        <View style={styles.docs}>
+          <Text style={styles.sectionTitle}>المستندات ({documents.length})</Text>
+          {documents.map((doc) => (
+            <Pressable
+              key={doc.url}
+              style={styles.docRow}
+              onPress={() =>
+                Linking.openURL(doc.url).catch(() =>
+                  Alert.alert('تنبيه', 'تعذر فتح المستند. يحتاج إلى اتصال بالموقع.'),
+                )
+              }>
+              <Text style={styles.docName}>{doc.name}</Text>
+              <Text style={styles.tech}>{doc.type}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       <Text style={styles.sectionTitle}>سجل التقارير ({reports.length})</Text>
 
@@ -93,7 +122,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.brand,
     padding: spacing.lg,
   },
   title: {
@@ -115,6 +144,22 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     textAlign: 'right',
     color: colors.text,
+  },
+  docs: { paddingBottom: spacing.sm },
+  docRow: {
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    padding: spacing.md,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  docName: {
+    fontSize: fontSize.md,
+    fontWeight: '600',
+    color: colors.primary,
+    textAlign: 'right',
   },
   list: { padding: spacing.md, paddingTop: 0 },
   empty: { textAlign: 'center', color: colors.textSecondary },

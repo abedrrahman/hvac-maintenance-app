@@ -1,9 +1,10 @@
 import { AseeLogo } from '@/components/AseeLogo';
 import { ReportCard } from '@/components/ReportCard';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import { searchReportsGlobal } from '@/db/repositories/reports';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { getReportsToUpload, searchReportsGlobal } from '@/db/repositories/reports';
+import { WebLink, clearNewSites, loadWebLink } from '@/services/webSync';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import {
   I18nManager,
   Pressable,
@@ -20,6 +21,16 @@ export default function HomeScreen() {
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<ReturnType<typeof searchReportsGlobal>>([]);
+  const [link, setLink] = useState<WebLink | null>(null);
+  const [waiting, setWaiting] = useState(0);
+
+  // Each time the home screen comes back: what the last sync found, and what still waits to upload.
+  useFocusEffect(
+    useCallback(() => {
+      loadWebLink().then(setLink);
+      setWaiting(getReportsToUpload().length);
+    }, []),
+  );
 
   const handleSearch = (text: string) => {
     setSearch(text);
@@ -36,13 +47,42 @@ export default function HomeScreen() {
         <AseeLogo large />
       </View>
 
+      {link && (link.newSites?.length || link.newUnits) ? (
+        <Pressable
+          style={styles.notice}
+          onPress={async () => {
+            await clearNewSites();
+            setLink(await loadWebLink());
+            router.push('/machines/index' as never);
+          }}>
+          <Text style={styles.noticeTitle}>
+            {link.newSites?.length
+              ? `مواقع جديدة على الموقع: ${link.newSites.length}`
+              : 'معدات جديدة على الموقع'}
+            {link.newUnits ? ` — ${link.newUnits} معدة` : ''}
+          </Text>
+          {link.newSites?.length ? (
+            <Text style={styles.noticeText}>{link.newSites.slice(0, 5).join('، ')}</Text>
+          ) : null}
+          <Text style={styles.noticeText}>اضغط للعرض</Text>
+        </Pressable>
+      ) : null}
+
+      {link && waiting > 0 ? (
+        <Text style={styles.waiting}>
+          {link.autoUpload === false
+            ? `تقارير بانتظار الرفع: ${waiting} — الرفع التلقائي متوقف`
+            : `تقارير بانتظار الرفع: ${waiting} — سترفع عند توفر الإنترنت`}
+        </Text>
+      ) : null}
+
       <View style={styles.searchBox}>
         <TextInput
           style={styles.searchInput}
           placeholder="بحث..."
           placeholderTextColor={colors.textSecondary}
           value={search}
-          onDebouncedChange={handleSearch}
+          onChangeText={handleSearch}
           textAlign="right"
         />
       </View>
@@ -78,6 +118,11 @@ export default function HomeScreen() {
           title="التقارير السابقة"
           subtitle="عرض جميع التقارير المحفوظة"
           onPress={() => router.push('/reports')}
+        />
+        <MenuButton
+          title="البحث عن الإنذارات"
+          subtitle="رمز الإنذار أو وصف المشكلة — يعمل بدون إنترنت"
+          onPress={() => router.push('/alarms' as never)}
         />
         <MenuButton
           title="المعدات المحفوظة"
@@ -135,6 +180,32 @@ const styles = StyleSheet.create({
   },
   searchBox: {
     marginBottom: spacing.lg,
+  },
+  notice: {
+    backgroundColor: colors.accentLight,
+    borderColor: colors.brand,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  noticeTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.brandDark,
+    textAlign: 'right',
+  },
+  noticeText: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  waiting: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'right',
+    marginBottom: spacing.md,
   },
   searchInput: {
     backgroundColor: colors.surface,

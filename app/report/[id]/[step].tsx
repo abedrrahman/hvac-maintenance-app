@@ -32,6 +32,7 @@ import {
 } from '@/db/repositories/reports';
 import { useReport } from '@/hooks/useReport';
 import { exportReportPdf, sharePdf } from '@/services/pdfGenerator';
+import { syncNow } from '@/services/webSync';
 import { PressureUnit, TempUnit } from '@/types';
 import { hasValue, isReportLocked } from '@/utils/helpers';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -252,6 +253,7 @@ export default function ReportStepScreen() {
             const pdfUri = await exportReportPdf(updated);
             await sharePdf(pdfUri);
             refresh();
+            syncNow().catch(() => {}); // send it to the website now if there is a connection; otherwise it waits
           } catch {
             Alert.alert('خطأ', 'فشل تصدير PDF.');
           } finally {
