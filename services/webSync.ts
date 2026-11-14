@@ -8,7 +8,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File } from 'expo-file-system';
 import { replaceAlarms } from '@/db/repositories/alarms';
-import { getMachineById, getWebMachineKeys, upsertWebMachine } from '@/db/repositories/machines';
+import { getMachineById, getWebMachineKeys, removeWebMachinesNotIn, upsertWebMachine } from '@/db/repositories/machines';
 import {
   getFullReport,
   getReportsToUpload,
@@ -249,6 +249,8 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
       web_visit_id: nextVisit.get(u.id) ?? null,
     });
   });
+
+  removeWebMachinesNotIn(data.units.map((u) => u.id));
 
   const addedUnits = first ? [] : data.units.filter((u) => !knownIds.has(u.id));
   const addedSites = new Set(

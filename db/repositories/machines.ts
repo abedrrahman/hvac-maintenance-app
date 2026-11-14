@@ -40,6 +40,15 @@ export function getWebMachineKeys(): { web_id: number; client_name: string }[] {
   );
 }
 
+/** Removes website units the website no longer sends (deleted or merged there). A unit with a report on this phone is kept, so no report loses its machine. */
+export function removeWebMachinesNotIn(webIds: number[]): void {
+  const keep = webIds.filter(Number.isInteger).join(','); // numbers only, so they are safe inside the SQL text (too many for parameters)
+  getDatabase().runSync(
+    `DELETE FROM machines WHERE web_id IS NOT NULL AND web_id NOT IN (${keep || 'NULL'})
+       AND id NOT IN (SELECT machine_id FROM reports WHERE machine_id IS NOT NULL)`,
+  );
+}
+
 /** One unit from the website's download. Updates the machine it matches, or adds it. Hand-typed details (capacity, year) are kept. */
 export function upsertWebMachine(data: {
   web_id: number;
