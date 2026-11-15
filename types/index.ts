@@ -64,6 +64,10 @@ export interface WebDocument {
   name: string;
   type: string;
   url: string;
+  /** Missing on units synced by an older app version, until the next sync. */
+  id?: number;
+  file_name?: string;
+  size?: number;
 }
 
 export interface CustomChecklistRowTemplate {

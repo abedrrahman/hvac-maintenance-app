@@ -204,7 +204,7 @@ interface SyncPayload {
     location: string;
     document_ids: number[];
   }[];
-  documents: { id: number; name_en: string; type: string; url: string }[];
+  documents: { id: number; name_en: string; type: string; url: string; file_name?: string; size?: number }[];
   visits: { id: number; unit_id: number; scheduled_date: string }[];
 }
 
@@ -232,7 +232,7 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
     const docs: WebDocument[] = u.document_ids
       .map((id) => documents.get(id))
       .filter((d): d is NonNullable<typeof d> => !!d)
-      .map((d) => ({ name: d.name_en, type: d.type, url: d.url }));
+      .map((d) => ({ name: d.name_en, type: d.type, url: d.url, id: d.id, file_name: d.file_name, size: d.size }));
     const client = clients.get(u.client_id);
     upsertWebMachine({
       web_id: u.id,
