@@ -8,12 +8,9 @@ import {
   getClientSummaries,
   getCountrySummaries,
 } from '@/db/repositories/machines';
-import {
-  countDocuments,
-  describeResult,
-  downloadDocuments,
-} from '@/services/offlineDocs';
-import { Machine } from '@/types';
+import { isSaved, saveDocument } from '@/services/offlineDocs';
+import { Machine, WebDocument } from '@/types';
+import { parseTemplateJson } from '@/db/repositories/machines';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
@@ -27,6 +24,17 @@ import {
 } from 'react-native';
 
 const SEARCH_LIMIT = 50;
+
+/** Every document of these units, each once (two units can share a manual). */
+function documentsOf(units: Machine[]): WebDocument[] {
+  const all = units.flatMap((m) => parseTemplateJson<WebDocument[]>(m.web_documents, []));
+  return [...new Map(all.map((d) => [d.id ?? d.url, d])).values()];
+}
+
+function countDocuments(units: Machine[]): { total: number; saved: number } {
+  const docs = documentsOf(units);
+  return { total: docs.length, saved: docs.filter(isSaved).length };
+}
 
 /** Route value for units the website gave no country: an empty route parameter does not survive navigation. */
 const NO_COUNTRY = '-';
@@ -80,10 +88,17 @@ export default function MachinesListScreen() {
     setProgress('...');
     try {
       const units = findMachines({ client });
-      const result = await downloadDocuments(units, (done, total) => setProgress(`${done} / ${total}`));
+      const docs = documentsOf(units).filter((d) => !isSaved(d));
+      let failed = 0;
+      for (let i = 0; i < docs.length; i += 1) {
+        setProgress(`${i} / ${docs.length}`);
+        await saveDocument(docs[i]).catch(() => {
+          failed += 1;
+        });
+      }
       setDocs(countDocuments(units));
-      const words = describeResult(result);
-      Alert.alert(words.title, words.message);
+      if (failed === 0) Alert.alert('تم', 'كل المستندات محفوظة على الهاتف.');
+      else Alert.alert('تنبيه', `لم يتم تنزيل ${failed} من ${docs.length}. تأكد من الاتصال بالإنترنت ثم حاول مرة أخرى.`);
     } finally {
       setProgress('');
     }

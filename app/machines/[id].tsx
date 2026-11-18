@@ -3,32 +3,26 @@ import { useCallback, useState } from 'react';
 import {
   Alert,
   FlatList,
-  Linking,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { File } from 'expo-file-system';
-import { Button } from '@/components/Button';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import {
-  describeResult,
-  downloadDocuments,
-  openSavedDocument,
-  savedDocument,
-} from '@/services/offlineDocs';
 import { getMachineById, parseTemplateJson } from '@/db/repositories/machines';
 import { getReportsByMachineId } from '@/db/repositories/reports';
+import { isSaved, openDocument, saveDocument } from '@/services/offlineDocs';
 import { Machine, Report, WebDocument } from '@/types';
 import { formatDisplayDate } from '@/utils/helpers';
+
+const megabytes = (bytes: number) => `${Math.max(bytes / 1048576, 0.1).toFixed(1)} MB`;
 
 export default function MachineDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [machine, setMachine] = useState<Machine | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
-  const [downloading, setDownloading] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null); // the document being downloaded, or 'all'
 
   const load = useCallback(() => {
     if (!id) return;
@@ -45,29 +39,39 @@ export default function MachineDetailScreen() {
   const documents = machine
     ? parseTemplateJson<WebDocument[]>(machine.web_documents, [])
     : [];
-  // read on every draw (a few folder checks), so a finished download shows at once
-  const saved = documents.map((doc) => savedDocument(doc.url));
-  const missing = saved.filter((file) => !file).length;
 
-  const handleDownload = async () => {
-    if (!machine) return;
-    setDownloading(true);
+  // A saved document opens with no signal. An unsaved one is downloaded first, which needs the website.
+  const failed = (doc: WebDocument) =>
+    Alert.alert(
+      'تنبيه',
+      doc.id == null
+        ? 'اضغط "مزامنة الآن" في الإعدادات مرة واحدة، ثم حاول مرة أخرى.'
+        : `تعذر تنزيل "${doc.name}". يحتاج التنزيل الأول إلى اتصال بالموقع.`,
+    );
+  const open = async (doc: WebDocument) => {
+    setBusy(doc.url);
     try {
-      const words = describeResult(await downloadDocuments([machine]));
-      Alert.alert(words.title, words.message);
+      await openDocument(doc);
+    } catch {
+      failed(doc);
     } finally {
-      setDownloading(false);
+      setBusy(null);
     }
   };
-
-  const openDocument = (doc: WebDocument, file: File | null) => {
-    const opening = file ? openSavedDocument(file) : Linking.openURL(doc.url);
-    opening.catch(() =>
-      Alert.alert(
-        'تنبيه',
-        file ? 'تعذر فتح المستند المحفوظ.' : 'تعذر فتح المستند. يحتاج إلى اتصال بالموقع.',
-      ),
-    );
+  const saveAll = async () => {
+    setBusy('all');
+    try {
+      for (const doc of documents) {
+        try {
+          await saveDocument(doc);
+        } catch {
+          failed(doc);
+          break; // no connection: the rest would fail the same way
+        }
+      }
+    } finally {
+      setBusy(null);
+    }
   };
 
   if (!machine) {
@@ -101,28 +105,35 @@ export default function MachineDetailScreen() {
       {documents.length > 0 && (
         <View style={styles.docs}>
           <Text style={styles.sectionTitle}>المستندات ({documents.length})</Text>
-          {documents.map((doc, i) => (
+          {documents.some((doc) => !isSaved(doc)) && (
+            <Pressable
+              style={[styles.docRow, styles.saveAll]}
+              disabled={busy !== null}
+              accessibilityRole="button"
+              onPress={saveAll}>
+              <Text style={styles.saveAllText}>
+                {busy === 'all' ? 'جاري التنزيل...' : 'تنزيل كل المستندات للعمل بدون إنترنت'}
+              </Text>
+            </Pressable>
+          )}
+          {documents.map((doc) => (
             <Pressable
               key={doc.url}
               style={styles.docRow}
-              onPress={() => openDocument(doc, saved[i])}>
+              disabled={busy !== null}
+              accessibilityRole="button"
+              onPress={() => open(doc)}>
               <Text style={styles.docName}>{doc.name}</Text>
               <Text style={styles.tech}>
-                {doc.type}
-                {saved[i] ? ' — ✓ محفوظ على الهاتف' : ' — يحتاج إنترنت'}
+                {doc.type} ·{' '}
+                {busy === doc.url
+                  ? 'جاري التنزيل...'
+                  : isSaved(doc)
+                    ? '✓ محفوظ على الهاتف'
+                    : `اضغط للتنزيل${doc.size ? ` (${megabytes(doc.size)})` : ''}`}
               </Text>
             </Pressable>
           ))}
-          {missing > 0 ? (
-            <View style={styles.docButton}>
-              <Button
-                title="تنزيل المستندات للعمل بدون إنترنت"
-                onPress={handleDownload}
-                variant="accent"
-                loading={downloading}
-              />
-            </View>
-          ) : null}
         </View>
       )}
 
@@ -188,7 +199,6 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   docs: { paddingBottom: spacing.sm },
-  docButton: { marginHorizontal: spacing.md },
   docRow: {
     backgroundColor: colors.surface,
     borderRadius: 10,
@@ -197,6 +207,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  saveAll: { backgroundColor: colors.brand, borderColor: colors.brand },
+  saveAllText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textLight,
+    textAlign: 'center',
   },
   docName: {
     fontSize: fontSize.md,

@@ -10,7 +10,7 @@ import { File } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 import { getDatabase } from '@/db/database';
 import { replaceAlarms } from '@/db/repositories/alarms';
-import { getMachineById, getWebMachineKeys, upsertWebMachine } from '@/db/repositories/machines';
+import { getMachineById, getWebMachineKeys, removeWebMachinesNotIn, upsertWebMachine } from '@/db/repositories/machines';
 import {
   getFullReport,
   getReportsToUpload,
@@ -218,7 +218,7 @@ interface SyncPayload {
     location: string;
     document_ids: number[];
   }[];
-  documents: { id: number; name_en: string; type: string; url: string }[];
+  documents: { id: number; name_en: string; type: string; url: string; file_name?: string; size?: number }[];
   visits: { id: number; unit_id: number; scheduled_date: string }[];
 }
 
@@ -250,7 +250,7 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
     const docs: WebDocument[] = u.document_ids
       .map((id) => documents.get(id))
       .filter((d): d is NonNullable<typeof d> => !!d)
-      .map((d) => ({ name: d.name_en, type: d.type, url: d.url }));
+      .map((d) => ({ name: d.name_en, type: d.type, url: d.url, id: d.id, file_name: d.file_name, size: d.size }));
     const client = clients.get(u.client_id);
     upsertWebMachine({
       web_id: u.id,
@@ -270,6 +270,8 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
     });
   }));
 
+  removeWebMachinesNotIn(data.units.map((u) => u.id));
+
   const addedUnits = first ? [] : data.units.filter((u) => !knownIds.has(u.id));
   const addedSites = new Set(
     addedUnits
@@ -285,22 +287,6 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
     newUnits: (current.newUnits ?? 0) + addedUnits.length,
   });
   return data.units.length;
-}
-
-function fileName(uri: string, fallback: string): string {
-  const name = uri.split('/').pop() ?? '';
-  return name.includes('.') ? name : fallback;
-}
-
-/**
- * A file for the upload form. Expo's fetch refuses React Native's { uri, name, type } parts
- * ("Unsupported FormDataPart implementation"): it wants something it can read bytes from.
- * A photo deleted from the phone is left out, so one missing picture does not block the report.
- */
-function filePart(uri: string, name: string, type: string): never {
-  const file = new File(uri);
-  if (!file.exists) return null as never;
-  return { name, type, bytes: () => file.bytes() } as never;
 }
 
 async function uploadReport(link: WebLink, reportId: string): Promise<void> {
@@ -320,11 +306,10 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
     }),
   );
   const pdfUri = await exportReportPdf(full);
-  form.append('pdf', filePart(pdfUri, `ASEE_Report_${reportId}.pdf`, 'application/pdf'));
-  photos.forEach((p, i) => {
-    const part = filePart(p.uri, fileName(p.uri, `photo_${i + 1}.jpg`), 'image/jpeg');
-    if (part) form.append('photo', part);
-  });
+  // Expo's fetch refuses React Native's { uri } parts ("Unsupported FormDataPart implementation"): attach expo-file-system Files.
+  form.append('pdf', new File(pdfUri) as never);
+  // A photo deleted from the phone is left out, so one missing picture does not block the report.
+  photos.map((p) => new File(p.uri)).filter((f) => f.exists).forEach((f) => form.append('photo', f as never));
 
   const response = await request(`${link.baseUrl}/api/reports/`, {
     method: 'POST',
