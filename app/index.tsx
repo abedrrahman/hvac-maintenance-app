@@ -1,8 +1,10 @@
 import { AseeLogo } from '@/components/AseeLogo';
 import { ReportCard } from '@/components/ReportCard';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import { getReportsToUpload, searchReportsGlobal } from '@/db/repositories/reports';
+import { getVisitsDue } from '@/db/repositories/machines';
+import { getReportsToUpload, searchReportsGlobal, visitGroupOf } from '@/db/repositories/reports';
 import { WebLink, clearNewSites, loadWebLink } from '@/services/webSync';
+import { formatDate } from '@/utils/helpers';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
@@ -23,12 +25,21 @@ export default function HomeScreen() {
   const [results, setResults] = useState<ReturnType<typeof searchReportsGlobal>>([]);
   const [link, setLink] = useState<WebLink | null>(null);
   const [waiting, setWaiting] = useState(0);
+  const [visits, setVisits] = useState<ReturnType<typeof getVisitsDue>>([]);
 
   // Each time the home screen comes back: what the last sync found, and what still waits to upload.
   useFocusEffect(
     useCallback(() => {
-      loadWebLink().then(setLink);
-      setWaiting(getReportsToUpload().length);
+      const load = () => {
+        loadWebLink().then(setLink);
+        setWaiting(getReportsToUpload().length);
+        setVisits(getVisitsDue(formatDate()));
+      };
+      load();
+      // shortcut: looked at again every 5 seconds while this screen shows, because the download from the
+      // website finishes a moment after the app opens and nothing tells this screen that it did.
+      const timer = setInterval(load, 5000);
+      return () => clearInterval(timer);
     }, []),
   );
 
@@ -53,7 +64,7 @@ export default function HomeScreen() {
           onPress={async () => {
             await clearNewSites();
             setLink(await loadWebLink());
-            router.push('/machines/index' as never);
+            router.push('/machines' as never);
           }}>
           <Text style={styles.noticeTitle}>
             {link.newSites?.length
@@ -67,6 +78,23 @@ export default function HomeScreen() {
           <Text style={styles.noticeText}>اضغط للعرض</Text>
         </Pressable>
       ) : null}
+
+      {visits.map((visit) => (
+        <Pressable
+          key={visit.client_name}
+          style={styles.notice}
+          onPress={() =>
+            router.push({
+              pathname: '/visit',
+              params: { group: visitGroupOf(formatDate(), visit.client_name) },
+            } as never)
+          }>
+          <Text style={styles.noticeTitle}>زيارة عقد اليوم: {visit.client_name || 'بدون عميل'}</Text>
+          <Text style={styles.noticeText}>
+            {visit.units} معدة — اضغط لتعبئة التقارير وتوقيعها مرة واحدة
+          </Text>
+        </Pressable>
+      ))}
 
       {link && waiting > 0 ? (
         <Text style={styles.waiting}>
@@ -127,7 +155,7 @@ export default function HomeScreen() {
         <MenuButton
           title="المعدات المحفوظة"
           subtitle="قاعدة بيانات المعدات"
-          onPress={() => router.push('/machines/index' as never)}
+          onPress={() => router.push('/machines' as never)}
         />
       </View>
 

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { getChecklistTemplate } from '@/constants/checklists';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { getFieldDefinitions } from '@/constants/checklists';
 import { colors, fontSize, spacing } from '@/constants/theme';
 import {
   ChecklistItem,
@@ -8,7 +8,7 @@ import {
   PressureUnit,
   TempUnit,
 } from '@/types';
-import { buildChillerChecklist, getVisibleCompressorFields } from '@/utils/chillerFields';
+import { visibleChecklistItems } from '@/utils/chillerFields';
 import { pressureUnitLabel, tempUnitLabel } from '@/utils/units';
 import { FormField } from './FormField';
 import { DropdownPicker } from './DropdownPicker';
@@ -21,16 +21,12 @@ interface Props {
   pressureUnit: PressureUnit;
   readOnly?: boolean;
   onUpdate: (id: string, value: string) => void;
+  /** Given on an open report: holding a row offers to remove it from this report. */
+  onDelete?: (id: string) => void;
 }
 
-function getFieldMeta(machineType: MachineType, fieldKey: string | null) {
-  if (!fieldKey) return undefined;
-  let def = getChecklistTemplate(machineType).find((f) => f.key === fieldKey);
-  if (!def && machineType === 'chiller') {
-    def = buildChillerChecklist(4, 4).find((f) => f.key === fieldKey);
-  }
-  return def;
-}
+// The phase and the counts decide which rows exist: removing one of them would leave the rest without a meaning.
+const FIXED_KEYS = ['unit_phase', 'compressor_count', 'circuit_count', 'supply_fan_count', 'extract_fan_count', 'return_fan_count'];
 
 function sectionTitle(section: string): string | null {
   const comp = section.match(/^compressor_(\d+)$/);
@@ -47,77 +43,34 @@ export function ChecklistSection({
   pressureUnit,
   readOnly,
   onUpdate,
+  onDelete,
 }: Props) {
+  const askDelete = (item: ChecklistItem) => {
+    if (readOnly || !onDelete || FIXED_KEYS.includes(item.field_key ?? '')) return;
+    Alert.alert('حذف الصف', `حذف "${item.label_ar || item.label_en}" من هذا التقرير فقط؟`, [
+      { text: 'إلغاء', style: 'cancel' },
+      { text: 'حذف', style: 'destructive', onPress: () => onDelete(item.id) },
+    ]);
+  };
+
   const [pickerItem, setPickerItem] = useState<{
     id: string;
     options: string[];
   } | null>(null);
 
-  const valueMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    items.forEach((i) => {
-      if (i.field_key) map[i.field_key] = i.value;
-    });
-    return map;
-  }, [items]);
-
-  const visibleItems = useMemo(() => {
-    if (machineType !== 'chiller') return items;
-
-    const compressorCount = parseInt(valueMap.compressor_count || '1', 10) || 1;
-    const visibleKeys = new Set<string>();
-
-    items.forEach((item) => {
-      if (!item.field_key) {
-        visibleKeys.add(item.id);
-        return;
-      }
-      const key = item.field_key;
-      if (
-        key === 'compressor_count' ||
-        key === 'circuit_count' ||
-        key === 'refrigerant_type' ||
-        key === 'phase_rotation' ||
-        key.startsWith('evap_') ||
-        key.startsWith('cond_') ||
-        key === 'oil_pressure' ||
-        key === 'electrical_panel'
-      ) {
-        visibleKeys.add(item.id);
-        return;
-      }
-
-      const compMatch = key.match(/^compressor_(\d+)_/);
-      if (compMatch) {
-        const idx = parseInt(compMatch[1], 10);
-        if (idx > compressorCount) return;
-        const vt = valueMap[`compressor_${idx}_voltage_type`] ?? '';
-        const allowed = getVisibleCompressorFields(idx - 1, vt);
-        if (allowed.includes(key)) visibleKeys.add(item.id);
-        return;
-      }
-
-      const circMatch = key.match(/^circuit_(\d+)_/);
-      if (circMatch) {
-        const idx = parseInt(circMatch[1], 10);
-        const circuitCount = parseInt(valueMap.circuit_count || '1', 10) || 1;
-        if (idx <= circuitCount) visibleKeys.add(item.id);
-        return;
-      }
-
-      visibleKeys.add(item.id);
-    });
-
-    return items.filter((i) => visibleKeys.has(i.id));
-  }, [items, machineType, valueMap]);
+  const visibleItems = useMemo(() => visibleChecklistItems(machineType, items), [items, machineType]);
+  const defs = useMemo(() => getFieldDefinitions(machineType), [machineType]);
 
   let lastSection = '';
 
   return (
     <View>
       <Text style={styles.title}>Maintenance Checklist:</Text>
+      {!readOnly && onDelete ? (
+        <Text style={styles.hint}>اضغط مطولاً على اسم أي صف لحذفه من هذا التقرير.</Text>
+      ) : null}
       {visibleItems.map((item) => {
-        const def = getFieldMeta(machineType, item.field_key);
+        const def = defs.find((d) => d.key === item.field_key);
         const sec = def?.section ?? '';
         const showHeader = sec && sec !== lastSection;
         if (showHeader) lastSection = sec;
@@ -136,7 +89,7 @@ export function ChecklistSection({
               : def?.unit ?? '';
 
         return (
-          <View key={item.id}>
+          <Pressable key={item.id} onLongPress={() => askDelete(item)} delayLongPress={600}>
             {header && <Text style={styles.sectionHeader}>{header}</Text>}
             {isDropdown ? (
               <View style={styles.row}>
@@ -153,6 +106,8 @@ export function ChecklistSection({
                       options: def?.options ?? ['1', '2', '3', '4'],
                     })
                   }
+                  onLongPress={() => askDelete(item)}
+                  delayLongPress={600}
                   disabled={readOnly}>
                   <Text
                     style={[
@@ -168,7 +123,9 @@ export function ChecklistSection({
                 labelEn={item.label_en}
                 labelAr={item.label_ar}
                 value={item.value}
-                onChangeText={(text) => onUpdate(item.id, text)}
+                // saved after a short pause (and on leaving the field), not on every letter: each save reloads the whole report
+                onDebouncedChange={(text) => onUpdate(item.id, text)}
+                debounceMs={600}
                 placeholder={
                   unitSuffix ? `___ ${unitSuffix}` : def?.placeholder ?? ''
                 }
@@ -183,7 +140,7 @@ export function ChecklistSection({
                 }
               />
             )}
-          </View>
+          </Pressable>
         );
       })}
 
@@ -207,6 +164,12 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     fontWeight: '700',
     color: colors.text,
+    marginBottom: spacing.md,
+  },
+  hint: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'right',
     marginBottom: spacing.md,
   },
   sectionHeader: {

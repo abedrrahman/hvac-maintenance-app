@@ -10,7 +10,8 @@ export function getDatabase(): SQLite.SQLiteDatabase {
   return db;
 }
 
-export async function initDatabase(): Promise<void> {
+// Not async: every step here is synchronous, and an async wrapper hid a failure from the caller's try/catch.
+export function initDatabase(): void {
   const database = getDatabase();
   database.execSync('PRAGMA journal_mode = WAL;');
   database.execSync('PRAGMA foreign_keys = ON;');

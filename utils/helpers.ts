@@ -2,10 +2,15 @@ export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+/** The number printed on a report: the second it was created (ids start with the time in milliseconds). */
+export function reportNumber(id: string): string {
+  return id.slice(2, 10);
+}
+
 export function formatDate(date: Date = new Date()): string {
   const y = date.getFullYear();
-  const m = date.getMonth() + 1;
-  const d = date.getDate();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 

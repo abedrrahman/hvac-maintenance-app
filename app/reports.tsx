@@ -43,7 +43,10 @@ export default function ReportsListScreen() {
   const handleDelete = (report: Report) => {
     Alert.alert(
       'حذف التقرير',
-      `حذف تقرير ${report.client || 'هذا العميل'}؟`,
+      // A locked report that never reached the website exists only on this phone.
+      report.status === 'locked' && !report.uploaded_at
+        ? 'هذا التقرير مقفل ولم يُرفع إلى الموقع بعد. حذفه نهائي ولا يمكن استرجاعه. متابعة؟'
+        : `حذف تقرير ${report.client || 'هذا العميل'}؟`,
       [
         { text: 'إلغاء', style: 'cancel' },
         {

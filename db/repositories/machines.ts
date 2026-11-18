@@ -2,7 +2,6 @@ import {
   DefaultMaterialTemplate,
   CustomChecklistRowTemplate,
   Machine,
-  MachineFilters,
   MachineTemplate,
   MachineType,
   PressureUnit,
@@ -30,6 +29,7 @@ function rowToMachine(row: Record<string, unknown>): Machine {
     project: (row.project as string) ?? '',
     web_documents: (row.web_documents as string) ?? '[]',
     web_visit_id: (row.web_visit_id as number) ?? null,
+    web_visit_date: (row.web_visit_date as string) ?? null,
   };
 }
 
@@ -49,11 +49,13 @@ export function upsertWebMachine(data: {
   model: string;
   serial_number: string;
   client_name: string;
+  country: string;
   site: string;
   location: string;
   project: string;
   web_documents: string;
   web_visit_id: number | null;
+  web_visit_date: string | null;
 }): void {
   const db = getDatabase();
   const existing = db.getFirstSync<{ id: string }>(
@@ -62,23 +64,24 @@ export function upsertWebMachine(data: {
   );
   if (existing) {
     db.runSync(
-      `UPDATE machines SET name=?, brand=?, model=?, serial_number=?, client_name=?, site=?,
-       location=?, project=?, web_documents=?, web_visit_id=? WHERE id=?`,
+      // the type too: the app can learn a better checklist for a website category (rooftop units were "split" once)
+      `UPDATE machines SET type=?, name=?, brand=?, model=?, serial_number=?, client_name=?, country=?, site=?,
+       location=?, project=?, web_documents=?, web_visit_id=?, web_visit_date=? WHERE id=?`,
       [
-        data.name, data.brand, data.model, data.serial_number, data.client_name, data.site,
-        data.location, data.project, data.web_documents, data.web_visit_id, existing.id,
+        data.type, data.name, data.brand, data.model, data.serial_number, data.client_name, data.country, data.site,
+        data.location, data.project, data.web_documents, data.web_visit_id, data.web_visit_date, existing.id,
       ],
     );
     return;
   }
   db.runSync(
     `INSERT INTO machines (id, type, name, brand, model, serial_number, client_name, site,
-     location, project, web_documents, web_visit_id, web_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     location, project, web_documents, web_visit_id, web_visit_date, web_id, created_at, country)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       generateId(), data.type, data.name, data.brand, data.model, data.serial_number,
       data.client_name, data.site, data.location, data.project, data.web_documents,
-      data.web_visit_id, data.web_id, new Date().toISOString(),
+      data.web_visit_id, data.web_visit_date, data.web_id, new Date().toISOString(), data.country,
     ],
   );
 }
@@ -168,27 +171,75 @@ export function getMachineById(id: string): Machine | null {
   return row ? rowToMachine(row) : null;
 }
 
-export function getAllMachines(filters?: MachineFilters): Machine[] {
-  const db = getDatabase();
-  let query = 'SELECT * FROM machines WHERE 1=1';
-  const params: string[] = [];
-
-  if (filters?.search) {
-    query +=
-      ' AND (client_name LIKE ? OR model LIKE ? OR serial_number LIKE ? OR site LIKE ? OR brand LIKE ? OR name LIKE ? OR project LIKE ?)';
-    const term = `%${filters.search}%`;
-    params.push(term, term, term, term, term, term, term);
-  }
-
-  query += ' ORDER BY created_at DESC';
-
-  return db
-    .getAllSync<Record<string, unknown>>(query, params)
-    .map(rowToMachine);
+export interface ClientSummary {
+  client_name: string;
+  site: string;
+  units: number;
 }
 
-export function searchMachines(query: string): Machine[] {
-  return getAllMachines({ search: query });
+export interface CountrySummary {
+  country: string;
+  clients: number;
+  units: number;
+}
+
+/** One row per country: the first page of the equipment list, like the website. Units with no country form one row. */
+export function getCountrySummaries(): CountrySummary[] {
+  return getDatabase().getAllSync<CountrySummary>(
+    `SELECT country, COUNT(DISTINCT client_name) AS clients, COUNT(*) AS units
+     FROM (SELECT COALESCE(country, '') AS country, client_name FROM machines)
+     GROUP BY country ORDER BY country = '', country COLLATE NOCASE`,
+  );
+}
+
+/** One row per client with its unit count, for one country or for all of them. */
+export function getClientSummaries(country?: string): ClientSummary[] {
+  return getDatabase().getAllSync<ClientSummary>(
+    `SELECT client_name, MAX(site) AS site, COUNT(*) AS units
+     FROM machines ${country === undefined ? '' : "WHERE COALESCE(country, '') = ?"}
+     GROUP BY client_name ORDER BY client_name COLLATE NOCASE`,
+    country === undefined ? [] : [country],
+  );
+}
+
+/** Clients whose contract visit is scheduled for this day, with how many units it covers. */
+export function getVisitsDue(date: string): { client_name: string; units: number }[] {
+  return getDatabase().getAllSync<{ client_name: string; units: number }>(
+    `SELECT client_name, COUNT(*) AS units FROM machines WHERE web_visit_date = ?
+     GROUP BY client_name ORDER BY client_name COLLATE NOCASE`,
+    [date],
+  );
+}
+
+/** Units of one client, units matching a search (capped, the full list holds hundreds), or units with a visit on a day. */
+export function findMachines(options: {
+  client?: string;
+  search?: string;
+  limit?: number;
+  visitDate?: string;
+}): Machine[] {
+  let query = 'SELECT * FROM machines WHERE 1=1';
+  const params: (string | number)[] = [];
+  if (options.client !== undefined) {
+    query += ' AND client_name = ?';
+    params.push(options.client);
+  }
+  if (options.visitDate) {
+    query += ' AND web_visit_date = ?';
+    params.push(options.visitDate);
+  }
+  if (options.search) {
+    query +=
+      ' AND (client_name LIKE ? OR model LIKE ? OR serial_number LIKE ? OR site LIKE ? OR brand LIKE ? OR name LIKE ? OR project LIKE ?)';
+    const term = `%${options.search}%`;
+    params.push(term, term, term, term, term, term, term);
+  }
+  query += ' ORDER BY name COLLATE NOCASE';
+  if (options.limit) {
+    query += ' LIMIT ?';
+    params.push(options.limit);
+  }
+  return getDatabase().getAllSync<Record<string, unknown>>(query, params).map(rowToMachine);
 }
 
 export function deleteMachine(id: string): void {
@@ -285,24 +336,6 @@ export function saveMachineTemplate(
   }
 
   return getMachineTemplate(machineId)!;
-}
-
-export function getReportsForMachine(machineId: string) {
-  const db = getDatabase();
-  return db.getAllSync<Record<string, unknown>>(
-    'SELECT * FROM reports WHERE machine_id = ? ORDER BY created_at DESC',
-    [machineId],
-  );
-}
-
-export function findMachineBySerial(serial: string): Machine | null {
-  if (!serial.trim()) return null;
-  const db = getDatabase();
-  const row = db.getFirstSync<Record<string, unknown>>(
-    'SELECT * FROM machines WHERE serial_number = ? COLLATE NOCASE LIMIT 1',
-    [serial.trim()],
-  );
-  return row ? rowToMachine(row) : null;
 }
 
 export function parseTemplateJson<T>(json: string, fallback: T): T {

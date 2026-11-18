@@ -11,6 +11,9 @@ export type MachineType =
   | 'chiller'
   | 'fcu'
   | 'split'
+  | 'rtu'
+  | 'dehumidifier'
+  | 'ccu'
   | 'vrf'
   | 'cooling_tower'
   | 'boiler'
@@ -38,6 +41,8 @@ export interface ChecklistFieldDef {
   placeholder?: string;
   unit?: string;
   section?: string;
+  /** An amps reading taken per phase (L1, L2, L3) when the unit is three-phase. */
+  perPhase?: boolean;
 }
 
 export interface Machine {
@@ -58,6 +63,8 @@ export interface Machine {
   project: string;
   web_documents: string;
   web_visit_id: number | null;
+  /** The day of that visit (YYYY-MM-DD), so the app can show the visits due today. */
+  web_visit_date: string | null;
 }
 
 export interface WebDocument {
@@ -117,6 +124,8 @@ export interface Report {
   /** When the locked report reached the website; empty while it waits for a connection. */
   uploaded_at: string | null;
   upload_error: string;
+  /** Reports made together for one contract visit share this ("date|client"): signed once, locked and sent together. */
+  visit_group: string | null;
 }
 
 export interface ChecklistItem {
@@ -186,10 +195,6 @@ export interface ReportFilters {
   machineType: MachineType | 'all';
   dateFrom: string | null;
   dateTo: string | null;
-}
-
-export interface MachineFilters {
-  search: string;
 }
 
 export interface SearchResult {

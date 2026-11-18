@@ -37,6 +37,13 @@ export function getChillerBaseFields(): ChecklistFieldDef[] {
       section: 'config',
     },
     {
+      key: 'machine_load',
+      labelEn: 'Machine Load (%)',
+      labelAr: 'نسبة تحميل المكينة',
+      type: 'number',
+      unit: '%',
+    },
+    {
       key: 'phase_rotation',
       labelEn: 'Phase Rotation',
       labelAr: 'اتجاه الفازات',
@@ -199,16 +206,6 @@ export function buildChillerChecklist(
   return fields;
 }
 
-export function isChillerDynamicKey(key: string): boolean {
-  return (
-    key.startsWith('compressor_') ||
-    key.startsWith('circuit_') ||
-    key === 'compressor_count' ||
-    key === 'circuit_count' ||
-    key === 'refrigerant_type'
-  );
-}
-
 export function getVisibleCompressorFields(
   index: number,
   voltageType: string,
@@ -227,6 +224,35 @@ export function getVisibleCompressorFields(
     keys.push(`compressor_${n}_voltage_1ph`);
   }
   return keys;
+}
+
+/**
+ * The rows a report shows, on the screen and in the PDF alike. A chiller's list holds rows for
+ * 4 compressors and 4 circuits: only the ones this machine has are kept. Other types show every row.
+ */
+export function visibleChecklistItems<T extends { field_key: string | null; value: string }>(
+  type: string,
+  items: T[],
+): T[] {
+  // Only chiller reports made before the unit-wide phase row carry a voltage type per compressor. Newer reports hold exactly their rows.
+  if (type !== 'chiller' || !items.some((i) => /_voltage_type$/.test(i.field_key ?? ''))) return items;
+  const values: Record<string, string> = {};
+  items.forEach((i) => {
+    if (i.field_key) values[i.field_key] = i.value;
+  });
+  const compressors = parseInt(values.compressor_count || '1', 10) || 1;
+  const circuits = parseInt(values.circuit_count || '1', 10) || 1;
+  return items.filter((item) => {
+    const key = item.field_key ?? '';
+    const comp = key.match(/^compressor_(\d+)_/);
+    if (comp) {
+      const n = parseInt(comp[1], 10);
+      if (n > compressors) return false;
+      return getVisibleCompressorFields(n - 1, values[`compressor_${n}_voltage_type`] ?? '').includes(key);
+    }
+    const circ = key.match(/^circuit_(\d+)_/);
+    return circ ? parseInt(circ[1], 10) <= circuits : true;
+  });
 }
 
 export { REFRIGERANT_OPTIONS };

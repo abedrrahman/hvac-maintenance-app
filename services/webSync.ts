@@ -6,6 +6,9 @@
  * The app keeps working with no connection; anything that fails is tried again on the next sync.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File } from 'expo-file-system';
+import * as SecureStore from 'expo-secure-store';
+import { getDatabase } from '@/db/database';
 import { replaceAlarms } from '@/db/repositories/alarms';
 import { getMachineById, getWebMachineKeys, upsertWebMachine } from '@/db/repositories/machines';
 import {
@@ -15,14 +18,18 @@ import {
   markReportUploaded,
 } from '@/db/repositories/reports';
 import { MachineType, WebDocument } from '@/types';
+import { formatDate } from '@/utils/helpers';
 import { exportReportPdf } from './pdfGenerator';
 
 const KEY = '@hvac_web_link';
+const TOKEN_KEY = 'hvac_web_token';
 const TIMEOUT_MS = 30000;
+// A report carries its PDF and photos: on a weak signal that takes far longer than a normal request.
+const UPLOAD_TIMEOUT_MS = 5 * 60000;
 
 export interface WebLink {
   baseUrl: string;
-  // shortcut: the token sits in AsyncStorage (not encrypted); move it to expo-secure-store if phones are shared or unlocked.
+  /** Kept in the phone's encrypted storage (expo-secure-store), never in AsyncStorage with the rest. */
   token: string;
   userName: string;
   lastSync: string | null;
@@ -108,18 +115,23 @@ export interface SyncResult {
 export async function loadWebLink(): Promise<WebLink | null> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as WebLink) : null;
+    if (!raw) return null;
+    const link = JSON.parse(raw) as WebLink;
+    const token = await SecureStore.getItemAsync(TOKEN_KEY);
+    return token ? { ...link, token } : null;
   } catch {
     return null;
   }
 }
 
 async function saveWebLink(link: WebLink): Promise<void> {
-  await AsyncStorage.setItem(KEY, JSON.stringify(link));
+  await SecureStore.setItemAsync(TOKEN_KEY, link.token);
+  await AsyncStorage.setItem(KEY, JSON.stringify({ ...link, token: '' }));
 }
 
 export async function signOut(): Promise<void> {
   await AsyncStorage.removeItem(KEY);
+  await SecureStore.deleteItemAsync(TOKEN_KEY);
 }
 
 function cleanBaseUrl(text: string): string {
@@ -127,9 +139,9 @@ function cleanBaseUrl(text: string): string {
   return /^https?:\/\//i.test(url) ? url : `https://${url}`;
 }
 
-async function request(url: string, init: RequestInit): Promise<Response> {
+async function request(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
@@ -183,13 +195,16 @@ export function machineTypeFor(category: string): MachineType {
   if (c.includes('vrf') || c.includes('vrv')) return 'vrf';
   if (c.includes('cooling tower')) return 'cooling_tower';
   if (c.includes('boiler')) return 'boiler';
-  // Rooftop, close control and dehumidification units are packaged DX machines: the split checklist fits them best.
-  if (/split|ducted|rooftop|rtu|close control|ccu|dehumid/.test(c)) return 'split';
+  if (/roof ?top|rtu/.test(c)) return 'rtu';
+  if (c.includes('dehumid')) return 'dehumidifier';
+  if (/close control|ccu|crac|precision/.test(c)) return 'ccu';
+  if (/split|ducted/.test(c)) return 'split';
   return 'custom';
 }
 
 interface SyncPayload {
-  clients: { id: number; name_en: string; name_ar: string }[];
+  /** country: not sent by the website yet. Until it is, the app has one group and opens on the clients. */
+  clients: { id: number; name_en: string; name_ar: string; country?: string }[];
   units: {
     id: number;
     name_en: string;
@@ -222,12 +237,16 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
 
   const clients = new Map(data.clients.map((c) => [c.id, c]));
   const documents = new Map(data.documents.map((d) => [d.id, d]));
-  const nextVisit = new Map<number, number>(); // visits arrive oldest first: keep the first per unit
+  // Visits arrive oldest first: keep the first per unit. A visit scheduled for today wins, so today's contract visits show.
+  const today = formatDate();
+  const nextVisit = new Map<number, { id: number; date: string }>();
   data.visits.forEach((v) => {
-    if (!nextVisit.has(v.unit_id)) nextVisit.set(v.unit_id, v.id);
+    const date = (v.scheduled_date ?? '').slice(0, 10);
+    if (!nextVisit.has(v.unit_id) || date === today) nextVisit.set(v.unit_id, { id: v.id, date });
   });
 
-  data.units.forEach((u) => {
+  // One transaction for the whole list: saving 800+ units one by one froze the app for seconds at every start.
+  getDatabase().withTransactionSync(() => data.units.forEach((u) => {
     const docs: WebDocument[] = u.document_ids
       .map((id) => documents.get(id))
       .filter((d): d is NonNullable<typeof d> => !!d)
@@ -241,13 +260,15 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
       model: u.model,
       serial_number: u.serial_number,
       client_name: client?.name_en ?? '',
+      country: typeof client?.country === 'string' ? client.country.trim() : '',
       site: client?.name_ar || client?.name_en || '',
       location: u.location,
       project: u.project,
       web_documents: JSON.stringify(docs),
-      web_visit_id: nextVisit.get(u.id) ?? null,
+      web_visit_id: nextVisit.get(u.id)?.id ?? null,
+      web_visit_date: nextVisit.get(u.id)?.date ?? null,
     });
-  });
+  }));
 
   const addedUnits = first ? [] : data.units.filter((u) => !knownIds.has(u.id));
   const addedSites = new Set(
@@ -271,6 +292,17 @@ function fileName(uri: string, fallback: string): string {
   return name.includes('.') ? name : fallback;
 }
 
+/**
+ * A file for the upload form. Expo's fetch refuses React Native's { uri, name, type } parts
+ * ("Unsupported FormDataPart implementation"): it wants something it can read bytes from.
+ * A photo deleted from the phone is left out, so one missing picture does not block the report.
+ */
+function filePart(uri: string, name: string, type: string): never {
+  const file = new File(uri);
+  if (!file.exists) return null as never;
+  return { name, type, bytes: () => file.bytes() } as never;
+}
+
 async function uploadReport(link: WebLink, reportId: string): Promise<void> {
   const full = getFullReport(reportId);
   if (!full) return;
@@ -288,21 +320,25 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
     }),
   );
   const pdfUri = await exportReportPdf(full);
-  form.append('pdf', { uri: pdfUri, name: `ASEE_Report_${reportId}.pdf`, type: 'application/pdf' } as never);
+  form.append('pdf', filePart(pdfUri, `ASEE_Report_${reportId}.pdf`, 'application/pdf'));
   photos.forEach((p, i) => {
-    form.append('photo', { uri: p.uri, name: fileName(p.uri, `photo_${i + 1}.jpg`), type: 'image/jpeg' } as never);
+    const part = filePart(p.uri, fileName(p.uri, `photo_${i + 1}.jpg`), 'image/jpeg');
+    if (part) form.append('photo', part);
   });
 
   const response = await request(`${link.baseUrl}/api/reports/`, {
     method: 'POST',
     headers: { Authorization: `Token ${link.token}` },
     body: form,
-  });
+  }, UPLOAD_TIMEOUT_MS);
   if ([400, 403, 404].includes(response.status)) throw new RefusedError(await errorText(response));
   if (!response.ok) throw new Error(await errorText(response));
 }
 
 let running = false;
+/** After an upload fails, automatic tries wait until this time: each try rebuilds the report's PDF. "Sync now" ignores it. */
+let retryUploadsAt = 0;
+const RETRY_UPLOADS_AFTER_MS = 10 * 60000;
 
 /** Uploads waiting reports, then refreshes the site data. Safe to call often: it does nothing while a sync is already running. */
 export async function syncNow(options: { download?: boolean; manual?: boolean } = {}): Promise<SyncResult> {
@@ -320,7 +356,7 @@ export async function syncNow(options: { download?: boolean; manual?: boolean } 
       return { ok: false, message: 'offline', uploaded: 0, waiting: getReportsToUpload().length };
     }
     // With automatic upload switched off, reports leave the phone only when the user presses "Sync now".
-    const mayUpload = options.manual || link.autoUpload !== false;
+    const mayUpload = options.manual || (link.autoUpload !== false && Date.now() >= retryUploadsAt);
     for (const report of mayUpload ? getReportsToUpload() : []) {
       // A refused report waits for the user ("Sync now" in Settings), so the phone does not rebuild its PDF every minute.
       if (report.upload_error && !options.manual) continue;
@@ -332,6 +368,7 @@ export async function syncNow(options: { download?: boolean; manual?: boolean } 
         // Kept for the next sync. The website ignores a report it already has, so trying again is safe.
         message = error instanceof Error ? error.message : String(error);
         if (error instanceof RefusedError) markReportUploadError(report.id, message);
+        else retryUploadsAt = Date.now() + RETRY_UPLOADS_AFTER_MS;
       }
     }
     if (options.download) {

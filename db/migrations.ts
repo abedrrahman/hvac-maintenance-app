@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 6;
 
 function columnExists(
   db: SQLite.SQLiteDatabase,
@@ -211,6 +211,31 @@ function migrateV3(db: SQLite.SQLiteDatabase): void {
   `);
 }
 
+// V4: contract visits. A machine remembers the date of its next visit; reports made for one visit share a group.
+function migrateV4(db: SQLite.SQLiteDatabase): void {
+  if (!columnExists(db, 'machines', 'web_visit_date')) {
+    db.execSync('ALTER TABLE machines ADD COLUMN web_visit_date TEXT');
+  }
+  if (!columnExists(db, 'reports', 'visit_group')) {
+    db.execSync('ALTER TABLE reports ADD COLUMN visit_group TEXT');
+  }
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_visit ON reports(visit_group)');
+}
+
+// V5: the equipment list starts from the country, like the website: country -> clients -> units.
+function migrateV5(db: SQLite.SQLiteDatabase): void {
+  if (!columnExists(db, 'machines', 'country')) {
+    db.execSync("ALTER TABLE machines ADD COLUMN country TEXT DEFAULT ''");
+  }
+}
+
+// V6: a report remembers the template rows the technician removed from it, so they are not put back.
+function migrateV6(db: SQLite.SQLiteDatabase): void {
+  if (!columnExists(db, 'reports', 'removed_rows')) {
+    db.execSync("ALTER TABLE reports ADD COLUMN removed_rows TEXT DEFAULT ''");
+  }
+}
+
 export function runMigrations(db: SQLite.SQLiteDatabase): void {
   const version = getSchemaVersion(db);
 
@@ -227,6 +252,21 @@ export function runMigrations(db: SQLite.SQLiteDatabase): void {
   if (getSchemaVersion(db) < 3) {
     migrateV3(db);
     setSchemaVersion(db, 3);
+  }
+
+  if (getSchemaVersion(db) < 4) {
+    migrateV4(db);
+    setSchemaVersion(db, 4);
+  }
+
+  if (getSchemaVersion(db) < 5) {
+    migrateV5(db);
+    setSchemaVersion(db, 5);
+  }
+
+  if (getSchemaVersion(db) < 6) {
+    migrateV6(db);
+    setSchemaVersion(db, 6);
   }
 
   if (getSchemaVersion(db) < CURRENT_VERSION) {

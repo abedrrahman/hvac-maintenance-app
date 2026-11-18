@@ -1,7 +1,7 @@
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
-import { AppState } from 'react-native';
+import { useEffect, useState } from 'react';
+import { AppState, Keyboard, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 import { DatabaseProvider } from '@/context/DatabaseProvider';
 import { colors } from '@/constants/theme';
@@ -41,9 +41,22 @@ export default function RootLayout() {
     SplashScreen.hideAsync();
   }, []);
 
+  // Android no longer shrinks the window for the keyboard (edge-to-edge), so every screen is lifted here instead.
+  // Not KeyboardAvoidingView: it left a strip of padding behind after the keyboard closed.
+  const [keyboard, setKeyboard] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setKeyboard(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
   return (
     <DatabaseProvider>
       <AutoSync />
+      <View style={[styles.fill, { paddingBottom: keyboard }]}>
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.brand },
@@ -59,6 +72,7 @@ export default function RootLayout() {
           options={{ title: 'المعدات المحفوظة' }}
         />
         <Stack.Screen name="machines/[id]" options={{ title: 'تفاصيل المعدة' }} />
+        <Stack.Screen name="visit" options={{ title: 'زيارة عقد' }} />
         <Stack.Screen name="settings" options={{ title: 'الإعدادات' }} />
         <Stack.Screen name="alarms" options={{ title: 'البحث عن الإنذارات' }} />
         <Stack.Screen
@@ -67,6 +81,9 @@ export default function RootLayout() {
         />
         <Stack.Screen name="report/[id]" options={{ headerShown: false }} />
       </Stack>
+      </View>
     </DatabaseProvider>
   );
 }
+
+const styles = StyleSheet.create({ fill: { flex: 1 } });

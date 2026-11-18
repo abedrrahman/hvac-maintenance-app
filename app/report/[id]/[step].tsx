@@ -4,7 +4,7 @@ import { DropdownPicker } from '@/components/DropdownPicker';
 import { FormField } from '@/components/FormField';
 import { LockedBadge } from '@/components/LockedBadge';
 import { ProgressBar } from '@/components/ProgressBar';
-import { SignatureBlock } from '@/components/SignatureBlock';
+import { SignatureModal } from '@/components/SignatureModal';
 import { StepContainer } from '@/components/StepContainer';
 import { UnitsSelector } from '@/components/UnitsSelector';
 import { FORM_STEPS, TOTAL_STEPS } from '@/constants/checklists';
@@ -19,11 +19,13 @@ import {
   addPhoto,
   deletePhoto,
   getFullReport,
+  getVisitReports,
   lockReport,
   removeMaterialRow,
   saveSignature,
   syncMachineFromReport,
   updateAttentionNote,
+  deleteChecklistItem,
   updateChecklistItem,
   updateMaterial,
   updatePhotoCaption,
@@ -34,15 +36,14 @@ import { useReport } from '@/hooks/useReport';
 import { exportReportPdf, sharePdf } from '@/services/pdfGenerator';
 import { syncNow } from '@/services/webSync';
 import { PressureUnit, TempUnit } from '@/types';
-import { hasValue, isReportLocked } from '@/utils/helpers';
+import { formatDate, hasValue, isReportLocked } from '@/utils/helpers';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -147,16 +148,12 @@ export default function ReportStepScreen() {
   const [showMaintenancePicker, setShowMaintenancePicker] = useState(false);
   const [customLabelEn, setCustomLabelEn] = useState('');
   const [customLabelAr, setCustomLabelAr] = useState('');
-  const [techName, setTechName] = useState('');
-  const [clientName, setClientName] = useState('');
   const [brand, setBrand] = useState('');
   const [capacity, setCapacity] = useState('');
   const [location, setLocation] = useState('');
   const [installYear, setInstallYear] = useState('');
   const [exporting, setExporting] = useState(false);
   const [activeSig, setActiveSig] = useState<'technician' | 'client' | null>(null);
-  const sigRef = useRef<any>(null);
-  const saveRequested = useRef(false);
 
   const locked = report ? isReportLocked(report.status) : false;
   const stepInfo = FORM_STEPS.find((s) => s.step === step) ?? FORM_STEPS[0];
@@ -168,6 +165,14 @@ export default function ReportStepScreen() {
     if (parts.length === 3) return new Date(parts[0], parts[1] - 1, parts[2]);
     return new Date();
   }, [report?.date]);
+
+  // A report of a contract visit: its neighbours, to step from one unit's report to the next.
+  const visit = useMemo(
+    () => (report?.visit_group ? getVisitReports(report.visit_group) : []),
+    [report?.visit_group],
+  );
+  const visitAt = visit.findIndex((r) => r.id === id);
+  const openVisit = () => router.dismissTo({ pathname: '/visit', params: { group: report?.visit_group ?? '' } } as never);
 
   useEffect(() => {
     if (report?.machine_id) {
@@ -290,7 +295,7 @@ export default function ReportStepScreen() {
                 onChange={(_, date) => {
                   setShowDatePicker(Platform.OS === 'ios');
                   if (date) {
-                    updateReport(id!, { date: `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}` });
+                    updateReport(id!, { date: formatDate(date) });
                     refresh();
                   }
                 }}
@@ -300,9 +305,7 @@ export default function ReportStepScreen() {
               labelEn="Client"
               labelAr="العميل"
               value={report.client}
-              onDebouncedChange={(v) => {
-                console.log("Typed:", v);
-              }}
+              onDebouncedChange={(v) => { updateReport(id!, { client: v }); refresh(); }}
               readOnly={locked}
               highlight={hasValue(report.client)}
             />
@@ -360,6 +363,7 @@ export default function ReportStepScreen() {
               pressureUnit={report.pressure_unit}
               readOnly={locked}
               onUpdate={(itemId, value) => { updateChecklistItem(itemId, value); refresh(); }}
+              onDelete={(itemId) => { deleteChecklistItem(itemId); refresh(); }}
             />
             {!locked && (
               <View style={styles.customSection}>
@@ -473,6 +477,15 @@ export default function ReportStepScreen() {
         return (
           <>
             {locked && <LockedBadge />}
+            {!locked && report.visit_group ? (
+              <View style={styles.visitNote}>
+                <Text style={styles.visitNoteText}>
+                  هذا التقرير جزء من زيارة عقد ({visit.length} تقارير). يمكن توقيع كل التقارير مرة واحدة وقفلها وإرسالها معاً من صفحة الزيارة.
+                </Text>
+                <Button title="التوقيع والقفل لكل تقارير الزيارة" onPress={openVisit} variant="accent" />
+                <Text style={styles.visitNoteText}>أو وقّع هذا التقرير وحده:</Text>
+              </View>
+            ) : null}
             <View style={styles.signatures}>
               <TouchableOpacity
                 style={[styles.sigButton, report.signatures.find(s => s.type === 'technician') && styles.sigButtonDone]}
@@ -496,58 +509,24 @@ export default function ReportStepScreen() {
                 <Text style={styles.sigButtonLabel}>توقيع العميل</Text>
                 <Text style={styles.sigButtonLabelEn}>Customer Signature</Text>
                 {report.signatures.find(s => s.type === 'client') && (
-                  <Text style={styles.sigButtonSub}>{clientName}</Text>
+                  <Text style={styles.sigButtonSub}>{report.signatures.find(s => s.type === 'client')?.signer_name}</Text>
                 )}
               </TouchableOpacity>
             </View>
 
-            <Modal visible={activeSig !== null} animationType="slide" transparent>
-              <View style={styles.modalOverlay}>
-                <View style={styles.modalCard}>
-                  <Text style={styles.modalTitle}>
-                    {activeSig === 'technician' ? 'توقيع الفني / Technician' : 'توقيع العميل / Customer'}
-                  </Text>
-                  <FormField
-                    labelEn="Name" labelAr="الاسم"
-                    value={activeSig === 'technician' ? (techName || report.technician) : clientName}
-                    onDebouncedChange={activeSig === 'technician' ? setTechName : setClientName}
-                    placeholder={activeSig === 'client' ? 'مثال: Eng. Osama Alwaidh' : ''}
-                  />
-                  <View style={{ height: 260, width: '100%' }}>
-                    <SignatureBlock
-                      ref={sigRef}
-                      label=""
-                      onSave={(sig) => {
-                        if (!saveRequested.current) return;
-                        saveRequested.current = false;
-                        const name = activeSig === 'technician' ? (techName || report.technician) : clientName;
-                        console.log('✍️ Signature saved:', { type: activeSig, name, sigLength: sig.length });
-                        saveSignature(id!, activeSig!, sig, name, new Date().toLocaleDateString());
-                        refresh();
-                        setActiveSig(null); 
-                      }}
-                    />
-                  </View>
-                  <View style={styles.modalActions}>
-                    <TouchableOpacity style={styles.modalCancel} onPress={() => setActiveSig(null)}>
-                      <Text style={styles.modalCancelText}>إلغاء / Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.modalSave}
-                      onPress={() => {
-                        saveRequested.current = true;
-                        sigRef.current?.readSignature();
-                        setTimeout(() => {
-                          setActiveSig(null);
-                        }, 300);
-                      }}
-                    >
-                      <Text style={styles.modalSaveText}>حفظ / Save</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-            </Modal>
+            <SignatureModal
+              type={activeSig}
+              defaultName={
+                report.signatures.find((s) => s.type === activeSig)?.signer_name ||
+                (activeSig === 'technician' ? report.technician : '')
+              }
+              onClose={() => setActiveSig(null)}
+              onSave={(sig, name) => {
+                saveSignature(id!, activeSig!, sig, name, formatDate());
+                refresh();
+                setActiveSig(null);
+              }}
+            />
 
             {!locked && (
               <Button title="قفل وتصدير PDF" onPress={handleLockAndExport} variant="accent" loading={exporting} />
@@ -571,6 +550,28 @@ export default function ReportStepScreen() {
 
   return (
     <View style={styles.container}>
+      {visit.length > 1 && visitAt >= 0 ? (
+        <View style={styles.visitBar}>
+          <Pressable
+            style={styles.visitStep}
+            disabled={visitAt === 0}
+            onPress={() => router.replace(`/report/${visit[visitAt - 1].id}/${step}` as never)}>
+            <Text style={[styles.visitStepText, visitAt === 0 && styles.visitStepOff]}>السابق</Text>
+          </Pressable>
+          <Pressable style={styles.visitName} onPress={openVisit}>
+            <Text style={styles.visitNameText} numberOfLines={1}>
+              {visit[visitAt].unit_name} ({visitAt + 1}/{visit.length})
+            </Text>
+            <Text style={styles.visitHint}>كل تقارير الزيارة</Text>
+          </Pressable>
+          <Pressable
+            style={styles.visitStep}
+            disabled={visitAt === visit.length - 1}
+            onPress={() => router.replace(`/report/${visit[visitAt + 1].id}/${step}` as never)}>
+            <Text style={[styles.visitStepText, visitAt === visit.length - 1 && styles.visitStepOff]}>التالي</Text>
+          </Pressable>
+        </View>
+      ) : null}
       <ProgressBar currentStep={step} />
       <Text style={styles.stepTitle}>{stepInfo.titleAr} — {stepInfo.title}</Text>
       <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled">
@@ -621,13 +622,13 @@ const styles = StyleSheet.create({
   sigButtonLabel: { fontSize: fontSize.sm, fontWeight: '700', color: colors.text },
   sigButtonLabelEn: { fontSize: fontSize.sm, color: colors.textSecondary },
   sigButtonSub: { fontSize: fontSize.sm, color: colors.accent, marginTop: 2 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end', padding: spacing.md },
-  modalCard: { backgroundColor: colors.background, borderRadius: 20, padding: spacing.lg, gap: spacing.md, marginBottom: 20 },
-  modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text, textAlign: 'center' },
-  sigColumn: { flex: 1 },
-  modalActions: { flexDirection: 'row', gap: spacing.sm },
-  modalCancel: { flex: 1, paddingVertical: spacing.sm, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center' },
-  modalCancelText: { color: colors.textSecondary, fontWeight: '600', fontSize: fontSize.sm },
-  modalSave: { flex: 2, paddingVertical: spacing.sm, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center' },
-  modalSaveText: { color: '#FFFFFF', fontWeight: '700', fontSize: fontSize.sm },
+  visitBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.accentLight, borderBottomWidth: 1, borderBottomColor: colors.border },
+  visitStep: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  visitStepText: { fontSize: fontSize.md, fontWeight: '700', color: colors.brandDark },
+  visitStepOff: { color: colors.border },
+  visitName: { flex: 1, alignItems: 'center', paddingVertical: spacing.xs },
+  visitNameText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.text },
+  visitHint: { fontSize: fontSize.sm, color: colors.textSecondary },
+  visitNote: { gap: spacing.sm, marginBottom: spacing.md },
+  visitNoteText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'right' },
 });

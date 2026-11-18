@@ -1,7 +1,16 @@
 import { getDatabase } from '../database';
 import {
   DEFAULT_ATTENTION_ROWS,
-  getChecklistTemplate,
+  LEGACY_ROW_KEYS,
+  UNIT_CONFIG_TYPES,
+  UnitConfig,
+  buildChecklist,
+  defaultUnitConfig,
+  getFieldDefinitions,
+  hasUnitConfig,
+  unitConfigFromValues,
+  unitConfigValues,
+  unitRowKeys,
 } from '@/constants/checklists';
 import {
   getMachineById,
@@ -28,7 +37,6 @@ import {
   TempUnit,
   VoltageTypeConfig,
 } from '@/types';
-import { buildChillerChecklist, isChillerDynamicKey } from '@/utils/chillerFields';
 import { formatDate, generateId } from '@/utils/helpers';
 import { DEFAULT_UNITS, convertChecklistValueOnUnitChange } from '@/utils/units';
 
@@ -54,6 +62,7 @@ function rowToReport(row: Record<string, unknown>): Report {
     updated_at: row.updated_at as string,
     uploaded_at: (row.uploaded_at as string) ?? null,
     upload_error: (row.upload_error as string) ?? '',
+    visit_group: (row.visit_group as string) ?? null,
   };
 }
 
@@ -90,6 +99,7 @@ export interface CreateReportOptions {
   capacity?: string;
   location?: string;
   installationYear?: string;
+  visitGroup?: string;
 }
 
 function insertChecklistItem(
@@ -109,23 +119,19 @@ function insertChecklistItem(
   );
 }
 
+/** The phase and count rows start filled in, so the report shows what its rows were built for. */
 function seedDefaultChecklist(
   reportId: string,
   type: MachineType,
-  compressorCount = 1,
-  circuitCount = 1,
+  config: UnitConfig = defaultUnitConfig(type),
 ): void {
   if (type === 'custom') {
     seedChecklistFromCustomTemplates(reportId);
     return;
   }
 
-  const template =
-    type === 'chiller'
-      ? buildChillerChecklist(compressorCount, circuitCount)
-      : getChecklistTemplate(type);
-
-  template.forEach((field, index) => {
+  const values = hasUnitConfig(type) ? unitConfigValues(config) : {};
+  buildChecklist(type, config).forEach((field, index) => {
     insertChecklistItem(
       reportId,
       field.labelEn,
@@ -133,8 +139,17 @@ function seedDefaultChecklist(
       field.key,
       0,
       index,
+      values[field.key] ?? '',
     );
   });
+}
+
+function valuesByKey(items: ChecklistItem[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  items.forEach((i) => {
+    if (i.field_key) values[i.field_key] = i.value;
+  });
+  return values;
 }
 
 function seedMaterialsFromTemplate(
@@ -169,21 +184,31 @@ function seedAttentionRows(reportId: string, count = DEFAULT_ATTENTION_ROWS): vo
 
 function carryOverFromReport(
   newReportId: string,
+  type: MachineType,
   source: FullReport,
 ): void {
   const db = getDatabase();
 
-  source.checklist_items.forEach((item, index) => {
-    insertChecklistItem(
-      newReportId,
-      item.label_en,
-      item.label_ar,
-      item.field_key,
-      item.is_custom,
-      index,
-      '',
-    );
-  });
+  if (type !== 'custom' || source.type !== type) {
+    // Rows come from today's template, built for the compressors, circuits and fans the last report recorded.
+    // Only the rows the technician added by hand are copied. A row removed from the last report is back.
+    seedDefaultChecklist(newReportId, type, unitConfigFromValues(type, valuesByKey(source.checklist_items)));
+    source.checklist_items
+      .filter((item) => item.is_custom)
+      .forEach((item, i) => insertChecklistItem(newReportId, item.label_en, item.label_ar, null, 1, 1000 + i));
+  } else {
+    source.checklist_items.forEach((item, index) => {
+      insertChecklistItem(
+        newReportId,
+        item.label_en,
+        item.label_ar,
+        item.field_key,
+        item.is_custom,
+        index,
+        '',
+      );
+    });
+  }
 
   seedAttentionRows(newReportId);
 
@@ -212,17 +237,12 @@ export async function createReport(
   const tempUnit = options.tempUnit ?? DEFAULT_UNITS.tempUnit;
   const pressureUnit = options.pressureUnit ?? DEFAULT_UNITS.pressureUnit;
 
+  // One transaction: a crash halfway must not leave a report with half its rows.
+  db.withTransactionSync(() => {
   let machineId = options.machineId ?? null;
-  let compressorCount = 1;
-  let circuitCount = 1;
 
   let previousReport: FullReport | null = null;
   if (machineId) {
-    const template = getMachineTemplate(machineId);
-    if (template) {
-      compressorCount = template.compressor_count;
-      circuitCount = template.circuit_count;
-    }
     const prevRow = db.getFirstSync<{ id: string }>(
       'SELECT id FROM reports WHERE machine_id = ? ORDER BY created_at DESC LIMIT 1',
       [machineId],
@@ -232,15 +252,15 @@ export async function createReport(
 
   db.runSync(
     `INSERT INTO reports (id, type, machine_id, date, maintenance_type, status,
-     temp_unit, pressure_unit, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
-    [id, type, machineId, date, maintenanceType, tempUnit, pressureUnit, now, now],
+     temp_unit, pressure_unit, created_at, updated_at, visit_group)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
+    [id, type, machineId, date, maintenanceType, tempUnit, pressureUnit, now, now, options.visitGroup ?? null],
   );
 
   const machineTemplate = machineId ? getMachineTemplate(machineId) : null;
 
   if (previousReport) {
-    carryOverFromReport(id, previousReport);
+    carryOverFromReport(id, type, previousReport);
     db.runSync(
       'UPDATE reports SET client = ?, site = ?, machine_model = ?, serial_no = ?, temp_unit = ?, pressure_unit = ? WHERE id = ?',
       [
@@ -254,7 +274,14 @@ export async function createReport(
       ],
     );
   } else if (machineTemplate) {
-    seedDefaultChecklist(id, type, machineTemplate.compressor_count, machineTemplate.circuit_count);
+    seedDefaultChecklist(
+      id,
+      type,
+      unitConfigFromValues(type, {
+        compressor_count: String(machineTemplate.compressor_count),
+        circuit_count: String(machineTemplate.circuit_count),
+      }),
+    );
     const customRows = parseTemplateJson<CustomChecklistRowTemplate[]>(
       machineTemplate.custom_checklist_rows,
       [],
@@ -269,7 +296,7 @@ export async function createReport(
     seedMaterialsFromTemplate(id, defaultMaterials);
     seedAttentionRows(id);
   } else {
-    seedDefaultChecklist(id, type, compressorCount, circuitCount);
+    seedDefaultChecklist(id, type);
     seedMaterialsFromTemplate(id, []);
     seedAttentionRows(id);
   }
@@ -294,6 +321,7 @@ export async function createReport(
       installation_year: options.installationYear,
     });
   }
+  });
 
   return getReportById(id)!;
 }
@@ -316,14 +344,14 @@ export function syncMachineFromReport(report: Report, extras?: {
   const machine = upsertMachine({
     id: report.machine_id ?? undefined,
     type: report.type,
-    brand: extras?.brand ?? '',
+    brand: extras?.brand,
     model: report.machine_model,
     serial_number: report.serial_no,
-    capacity: extras?.capacity ?? '',
+    capacity: extras?.capacity,
     client_name: report.client,
     site: report.site,
-    location: extras?.location ?? '',
-    installation_year: extras?.installation_year ?? '',
+    location: extras?.location,
+    installation_year: extras?.installation_year,
   });
 
   if (!report.machine_id) {
@@ -374,55 +402,92 @@ export function saveMachineTemplateFromReport(report: FullReport): void {
   });
 }
 
-export function syncChillerDynamicFields(reportId: string): void {
+/** Template rows the technician removed from this report (held on a row): they must not come back when the rows are rebuilt. */
+function removedRows(reportId: string): Set<string> {
+  const row = getDatabase().getFirstSync<{ removed_rows: string | null }>(
+    'SELECT removed_rows FROM reports WHERE id = ?',
+    [reportId],
+  );
+  return new Set((row?.removed_rows ?? '').split('|').filter(Boolean));
+}
+
+/** Removes one row from this report only. The unit's next report has it again. */
+export function deleteChecklistItem(id: string): void {
   const db = getDatabase();
+  const item = db.getFirstSync<ChecklistItem>('SELECT * FROM checklist_items WHERE id = ?', [id]);
+  if (!item) return;
+  db.withTransactionSync(() => {
+    if (item.field_key && !item.is_custom) {
+      const removed = removedRows(item.report_id).add(item.field_key);
+      db.runSync('UPDATE reports SET removed_rows = ? WHERE id = ?', [[...removed].join('|'), item.report_id]);
+    }
+    db.runSync('DELETE FROM checklist_items WHERE id = ?', [id]);
+  });
+}
+
+export const UNIT_CONFIG_KEYS = Object.keys(unitConfigValues(defaultUnitConfig('rtu')));
+
+/**
+ * After the phase or a count changed: the report gets exactly the rows its unit now has, in template order.
+ * Rows that stay keep their values. Rows of a compressor, circuit or fan that is gone are deleted.
+ */
+export function syncUnitRows(reportId: string): void {
+  const db = getDatabase();
+  const report = getReportById(reportId);
+  if (!report || !hasUnitConfig(report.type)) return;
   const items = db.getAllSync<ChecklistItem>(
-    'SELECT * FROM checklist_items WHERE report_id = ?',
+    'SELECT * FROM checklist_items WHERE report_id = ? ORDER BY sort_order',
     [reportId],
   );
-
-  let compressorCount = 1;
-  let circuitCount = 1;
-  items.forEach((item) => {
-    if (item.field_key === 'compressor_count') compressorCount = parseInt(item.value, 10) || 1;
-    if (item.field_key === 'circuit_count') circuitCount = parseInt(item.value, 10) || 1;
-  });
-
-  compressorCount = Math.min(Math.max(compressorCount, 1), 4);
-  circuitCount = Math.min(Math.max(circuitCount, 1), 4);
-
-  const desired = buildChillerChecklist(compressorCount, circuitCount);
-  const desiredKeys = new Set(desired.map((d) => d.key));
+  const config = unitConfigFromValues(report.type, valuesByKey(items));
+  const desired = buildChecklist(report.type, config);
+  const place = new Map(desired.map((field, index) => [field.key, index]));
+  const templateKeys = unitRowKeys(report.type);
+  const kept = new Set<string>();
+  let after = 1000; // hand-added rows and rows of older templates stay, below the template's rows
 
   items.forEach((item) => {
-    if (item.field_key && isChillerDynamicKey(item.field_key) && !desiredKeys.has(item.field_key)) {
-      if (!item.field_key.match(/^(compressor_count|circuit_count|refrigerant_type)$/)) {
-        db.runSync('DELETE FROM checklist_items WHERE id = ?', [item.id]);
-      }
+    const key = item.field_key ?? '';
+    const at = item.is_custom ? undefined : place.get(key);
+    if (at !== undefined && !kept.has(key)) {
+      kept.add(key);
+      if (item.sort_order !== at) db.runSync('UPDATE checklist_items SET sort_order = ? WHERE id = ?', [at, item.id]);
+    } else if (
+      !item.is_custom &&
+      (templateKeys.has(key) ||
+        /^compressor_\d+_voltage_type$/.test(key) ||
+        // a row of the older template goes once it is empty; a reading typed into it is kept
+        (LEGACY_ROW_KEYS.has(key) && !item.value.trim()))
+    ) {
+      db.runSync('DELETE FROM checklist_items WHERE id = ?', [item.id]);
+    } else {
+      db.runSync('UPDATE checklist_items SET sort_order = ? WHERE id = ?', [after++, item.id]);
     }
   });
 
-  const remaining = db.getAllSync<ChecklistItem>(
-    'SELECT * FROM checklist_items WHERE report_id = ?',
-    [reportId],
-  );
-  const existingKeys = new Set(remaining.map((i) => i.field_key).filter(Boolean));
-
-  let maxOrder = remaining.reduce((m, i) => Math.max(m, i.sort_order), 0);
-
-  desired.forEach((field) => {
-    if (!existingKeys.has(field.key)) {
-      maxOrder += 1;
-      insertChecklistItem(
-        reportId,
-        field.labelEn,
-        field.labelAr,
-        field.key,
-        0,
-        maxOrder,
-      );
+  const values = unitConfigValues(config);
+  const removed = removedRows(reportId);
+  desired.forEach((field, index) => {
+    if (!kept.has(field.key) && !removed.has(field.key)) {
+      insertChecklistItem(reportId, field.labelEn, field.labelAr, field.key, 0, index, values[field.key] ?? '');
     }
   });
+}
+
+/**
+ * Open reports started on an older template get today's rows (phase, counts, compressors, circuits, fans).
+ * Locked reports are left exactly as they were signed. Runs at every start over the few open reports:
+ * one that already matches is only read, so a report made by any earlier version is brought in line.
+ */
+export function upgradeOpenReports(): void {
+  const db = getDatabase();
+  const marks = UNIT_CONFIG_TYPES.map(() => '?').join(', ');
+  const old = db.getAllSync<{ id: string }>(
+    `SELECT id FROM reports WHERE status = 'open' AND type IN (${marks})`,
+    UNIT_CONFIG_TYPES,
+  );
+  if (old.length === 0) return;
+  db.withTransactionSync(() => old.forEach((r) => syncUnitRows(r.id)));
 }
 
 export function getReportById(id: string): Report | null {
@@ -570,11 +635,8 @@ export function updateChecklistItem(id: string, value: string): void {
     'SELECT * FROM checklist_items WHERE id = ?',
     [id],
   );
-  if (
-    item &&
-    (item.field_key === 'compressor_count' || item.field_key === 'circuit_count')
-  ) {
-    syncChillerDynamicFields(item.report_id);
+  if (item?.field_key && UNIT_CONFIG_KEYS.includes(item.field_key)) {
+    syncUnitRows(item.report_id);
   }
 }
 
@@ -600,11 +662,6 @@ export function addCustomChecklistItem(
   return db.getFirstSync<ChecklistItem>('SELECT * FROM checklist_items WHERE id = ?', [
     itemId,
   ])!;
-}
-
-export function removeCustomChecklistItem(id: string): void {
-  const db = getDatabase();
-  db.runSync('DELETE FROM checklist_items WHERE id = ? AND is_custom = 1', [id]);
 }
 
 export function updateAttentionNote(
@@ -738,12 +795,14 @@ export function lockReport(id: string): void {
 
 export function deleteReport(id: string): void {
   const db = getDatabase();
-  db.runSync('DELETE FROM checklist_items WHERE report_id = ?', [id]);
-  db.runSync('DELETE FROM attention_notes WHERE report_id = ?', [id]);
-  db.runSync('DELETE FROM materials WHERE report_id = ?', [id]);
-  db.runSync('DELETE FROM photos WHERE report_id = ?', [id]);
-  db.runSync('DELETE FROM signatures WHERE report_id = ?', [id]);
-  db.runSync('DELETE FROM reports WHERE id = ?', [id]);
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM checklist_items WHERE report_id = ?', [id]);
+    db.runSync('DELETE FROM attention_notes WHERE report_id = ?', [id]);
+    db.runSync('DELETE FROM materials WHERE report_id = ?', [id]);
+    db.runSync('DELETE FROM photos WHERE report_id = ?', [id]);
+    db.runSync('DELETE FROM signatures WHERE report_id = ?', [id]);
+    db.runSync('DELETE FROM reports WHERE id = ?', [id]);
+  });
 }
 
 export function getCustomChecklistTemplates(): CustomChecklistTemplate[] {
@@ -790,11 +849,12 @@ export function updateReportUnits(
   const report = getFullReport(reportId);
   if (!report) return;
 
+  const defs = getFieldDefinitions(report.type);
   report.checklist_items.forEach((item) => {
     if (!item.value.trim()) return;
     const converted = convertChecklistValueOnUnitChange(
       item.value,
-      item.field_key,
+      defs.find((d) => d.key === item.field_key)?.type,
       report.temp_unit,
       tempUnit,
       report.pressure_unit,
@@ -806,4 +866,83 @@ export function updateReportUnits(
   });
 
   updateReport(reportId, { temp_unit: tempUnit, pressure_unit: pressureUnit });
+}
+
+/** One report of a contract visit, with what the visit page shows about it. */
+export interface VisitReport extends Report {
+  unit_name: string;
+  /** How many checklist rows have a value: 0 means nobody has filled this report yet. */
+  filled: number;
+  tech_signed: number;
+  client_signed: number;
+}
+
+export function visitGroupOf(date: string, client: string): string {
+  return `${date}|${client}`;
+}
+
+export function getVisitReports(group: string): VisitReport[] {
+  const signed = (type: string) =>
+    `(SELECT COUNT(*) FROM signatures s WHERE s.report_id = r.id AND s.type = '${type}' AND s.image_base64 != '')`;
+  return getDatabase()
+    .getAllSync<Record<string, unknown>>(
+      `SELECT r.*, COALESCE(NULLIF(m.name, ''), NULLIF(r.machine_model, ''), r.serial_no) AS unit_name,
+         (SELECT COUNT(*) FROM checklist_items c WHERE c.report_id = r.id AND c.value != '') AS filled,
+         ${signed('technician')} AS tech_signed, ${signed('client')} AS client_signed
+       FROM reports r LEFT JOIN machines m ON m.id = r.machine_id
+       WHERE r.visit_group = ? ORDER BY unit_name COLLATE NOCASE, r.id`,
+      [group],
+    )
+    .map((row) => ({
+      ...rowToReport(row),
+      unit_name: (row.unit_name as string) ?? '',
+      filled: row.filled as number,
+      tech_signed: row.tech_signed as number,
+      client_signed: row.client_signed as number,
+    }));
+}
+
+/** A report for every unit of the visit that has none yet. Safe to run again: nothing is made twice. */
+export async function startVisit(
+  group: string,
+  machines: { id: string; type: MachineType }[],
+  units: { tempUnit: TempUnit; pressureUnit: PressureUnit },
+): Promise<void> {
+  const have = new Set(getVisitReports(group).map((r) => r.machine_id));
+  for (const machine of machines) {
+    if (!have.has(machine.id)) {
+      await createReport(machine.type, { machineId: machine.id, visitGroup: group, ...units });
+    }
+  }
+}
+
+/** One signature for every open report of the visit. The technician's name also fills reports that have none. */
+export function saveVisitSignature(
+  group: string,
+  type: 'technician' | 'client',
+  imageBase64: string,
+  signerName: string,
+  signedAt: string,
+): void {
+  const db = getDatabase();
+  db.withTransactionSync(() => {
+    getVisitReports(group)
+      .filter((r) => r.status === 'open')
+      .forEach((r) => saveSignature(r.id, type, imageBase64, signerName, signedAt));
+    if (type === 'technician' && signerName.trim()) {
+      db.runSync(
+        "UPDATE reports SET technician = ? WHERE visit_group = ? AND status = 'open' AND technician = ''",
+        [signerName.trim(), group],
+      );
+    }
+  });
+}
+
+/** Locks every open report of the visit in one step: all of them or none. */
+export function lockVisit(group: string): void {
+  getDatabase().withTransactionSync(() => {
+    getVisitReports(group)
+      .filter((r) => r.status === 'open')
+      .forEach((r) => lockReport(r.id));
+  });
 }

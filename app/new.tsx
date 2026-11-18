@@ -3,7 +3,7 @@ import { DropdownPicker } from '@/components/DropdownPicker';
 import { MAINTENANCE_TYPES } from '@/constants/company';
 import { MACHINE_TYPES, getMachineTypeInfo } from '@/constants/machineTypes';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import { searchMachines } from '@/db/repositories/machines';
+import { findMachines } from '@/db/repositories/machines';
 import {
   createReport,
   getCustomChecklistTemplates,
@@ -37,7 +37,7 @@ export default function NewReportScreen() {
 
   useEffect(() => {
     if (query.trim().length >= 1) {
-      setMachines(searchMachines(query.trim()).slice(0, 30)); // the website list holds hundreds of units
+      setMachines(findMachines({ search: query.trim(), limit: 30 })); // the website list holds hundreds of units
     } else {
       setMachines([]);
     }

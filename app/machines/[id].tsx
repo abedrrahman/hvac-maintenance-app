@@ -9,7 +9,15 @@ import {
   Text,
   View,
 } from 'react-native';
+import { File } from 'expo-file-system';
+import { Button } from '@/components/Button';
 import { colors, fontSize, spacing } from '@/constants/theme';
+import {
+  describeResult,
+  downloadDocuments,
+  openSavedDocument,
+  savedDocument,
+} from '@/services/offlineDocs';
 import { getMachineById, parseTemplateJson } from '@/db/repositories/machines';
 import { getReportsByMachineId } from '@/db/repositories/reports';
 import { Machine, Report, WebDocument } from '@/types';
@@ -20,6 +28,7 @@ export default function MachineDetailScreen() {
   const router = useRouter();
   const [machine, setMachine] = useState<Machine | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
+  const [downloading, setDownloading] = useState(false);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -36,6 +45,30 @@ export default function MachineDetailScreen() {
   const documents = machine
     ? parseTemplateJson<WebDocument[]>(machine.web_documents, [])
     : [];
+  // read on every draw (a few folder checks), so a finished download shows at once
+  const saved = documents.map((doc) => savedDocument(doc.url));
+  const missing = saved.filter((file) => !file).length;
+
+  const handleDownload = async () => {
+    if (!machine) return;
+    setDownloading(true);
+    try {
+      const words = describeResult(await downloadDocuments([machine]));
+      Alert.alert(words.title, words.message);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const openDocument = (doc: WebDocument, file: File | null) => {
+    const opening = file ? openSavedDocument(file) : Linking.openURL(doc.url);
+    opening.catch(() =>
+      Alert.alert(
+        'تنبيه',
+        file ? 'تعذر فتح المستند المحفوظ.' : 'تعذر فتح المستند. يحتاج إلى اتصال بالموقع.',
+      ),
+    );
+  };
 
   if (!machine) {
     return (
@@ -68,19 +101,28 @@ export default function MachineDetailScreen() {
       {documents.length > 0 && (
         <View style={styles.docs}>
           <Text style={styles.sectionTitle}>المستندات ({documents.length})</Text>
-          {documents.map((doc) => (
+          {documents.map((doc, i) => (
             <Pressable
               key={doc.url}
               style={styles.docRow}
-              onPress={() =>
-                Linking.openURL(doc.url).catch(() =>
-                  Alert.alert('تنبيه', 'تعذر فتح المستند. يحتاج إلى اتصال بالموقع.'),
-                )
-              }>
+              onPress={() => openDocument(doc, saved[i])}>
               <Text style={styles.docName}>{doc.name}</Text>
-              <Text style={styles.tech}>{doc.type}</Text>
+              <Text style={styles.tech}>
+                {doc.type}
+                {saved[i] ? ' — ✓ محفوظ على الهاتف' : ' — يحتاج إنترنت'}
+              </Text>
             </Pressable>
           ))}
+          {missing > 0 ? (
+            <View style={styles.docButton}>
+              <Button
+                title="تنزيل المستندات للعمل بدون إنترنت"
+                onPress={handleDownload}
+                variant="accent"
+                loading={downloading}
+              />
+            </View>
+          ) : null}
         </View>
       )}
 
@@ -146,6 +188,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   docs: { paddingBottom: spacing.sm },
+  docButton: { marginHorizontal: spacing.md },
   docRow: {
     backgroundColor: colors.surface,
     borderRadius: 10,
