@@ -1,5 +1,6 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { colors } from '@/constants/theme';
+import { reportNumber } from '@/utils/helpers';
 
 export default function ReportLayout() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -7,14 +8,14 @@ export default function ReportLayout() {
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: colors.primary },
+        headerStyle: { backgroundColor: colors.brand },
         headerTintColor: '#FFFFFF',
         headerTitleStyle: { fontWeight: '700' },
         contentStyle: { backgroundColor: colors.background },
       }}>
       <Stack.Screen
         name="[step]"
-        options={{ title: `تقرير ${id?.slice(0, 8) ?? ''}` }}
+        options={{ title: `تقرير ${reportNumber(id ?? '')}` }}
       />
       <Stack.Screen
         name="view"

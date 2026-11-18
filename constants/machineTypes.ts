@@ -33,6 +33,24 @@ export const MACHINE_TYPES: MachineTypeInfo[] = [
     reportTitle: (m) => `Split Unit ${m} Report`,
   },
   {
+    id: 'rtu',
+    labelEn: 'RTU (Rooftop Unit)',
+    labelAr: 'وحدة روف توب',
+    reportTitle: (m) => `Rooftop Unit ${m} Report`,
+  },
+  {
+    id: 'dehumidifier',
+    labelEn: 'Dehumidifier',
+    labelAr: 'مزيل الرطوبة',
+    reportTitle: (m) => `Dehumidifier ${m} Report`,
+  },
+  {
+    id: 'ccu',
+    labelEn: 'CCU (Close Control Unit)',
+    labelAr: 'وحدة التحكم الدقيق (مراكز البيانات)',
+    reportTitle: (m) => `Close Control Unit ${m} Report`,
+  },
+  {
     id: 'vrf',
     labelEn: 'VRF System',
     labelAr: 'نظام VRF',

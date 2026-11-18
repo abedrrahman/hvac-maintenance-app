@@ -11,6 +11,9 @@ export type MachineType =
   | 'chiller'
   | 'fcu'
   | 'split'
+  | 'rtu'
+  | 'dehumidifier'
+  | 'ccu'
   | 'vrf'
   | 'cooling_tower'
   | 'boiler'
@@ -38,6 +41,8 @@ export interface ChecklistFieldDef {
   placeholder?: string;
   unit?: string;
   section?: string;
+  /** An amps reading taken per phase (L1, L2, L3) when the unit is three-phase. */
+  perPhase?: boolean;
 }
 
 export interface Machine {
@@ -52,6 +57,24 @@ export interface Machine {
   location: string;
   installation_year: string;
   created_at: string;
+  /** From the ASEE website. web_id is empty for machines typed in by hand. */
+  web_id: number | null;
+  name: string;
+  project: string;
+  web_documents: string;
+  web_visit_id: number | null;
+  /** The day of that visit (YYYY-MM-DD), so the app can show the visits due today. */
+  web_visit_date: string | null;
+}
+
+export interface WebDocument {
+  name: string;
+  type: string;
+  url: string;
+  /** Missing on units synced by an older app version, until the next sync. */
+  id?: number;
+  file_name?: string;
+  size?: number;
 }
 
 export interface CustomChecklistRowTemplate {
@@ -102,6 +125,35 @@ export interface Report {
   pressure_unit: PressureUnit;
   created_at: string;
   updated_at: string;
+  /** When the locked report reached the website; empty while it waits for a connection. */
+  uploaded_at: string | null;
+  upload_error: string;
+  /** Reports of the older contract-visit screen ("date|client"). Kept for those reports; new ones use the contract. */
+  visit_group: string | null;
+  /** The website visit this report closes. */
+  visit_id: number | null;
+  contract_id: number | null;
+  contract_number: string;
+  contract_title: string;
+  /** The same for every report signed together for one contract: one client signature for all of them. */
+  contract_batch_id: string | null;
+}
+
+/** A visit from the website's sync: a unit to service on a day, on its own or as part of a contract. */
+export interface Visit {
+  id: number;
+  number: string;
+  unit_id: number;
+  client_id: number | null;
+  client_name: string;
+  scheduled_date: string;
+  type: string;
+  status: string;
+  overdue: number;
+  assigned_to_me: number;
+  contract_id: number | null;
+  contract_number: string;
+  contract_title: string;
 }
 
 export interface ChecklistItem {
@@ -171,10 +223,6 @@ export interface ReportFilters {
   machineType: MachineType | 'all';
   dateFrom: string | null;
   dateTo: string | null;
-}
-
-export interface MachineFilters {
-  search: string;
 }
 
 export interface SearchResult {

@@ -6,12 +6,14 @@ import SignatureCanvas from 'react-native-signature-canvas';
 interface Props {
   label?: string;
   onSave: (base64: string) => void;
+  /** Save was pressed with nothing drawn. */
+  onEmpty?: () => void;
   readOnly?: boolean;
   existingSignature?: string;
 }
 
 export const SignatureBlock = forwardRef<any, Props>(
-  ({ label, onSave, readOnly, existingSignature }, ref) => {
+  ({ label, onSave, onEmpty, readOnly, existingSignature }, ref) => {
     const canvasRef = useRef<any>(null);
 
     useImperativeHandle(ref, () => ({
@@ -20,9 +22,9 @@ export const SignatureBlock = forwardRef<any, Props>(
     }));
 
     const handleOK = (signature: string) => {
-      if (signature) {
-        onSave(signature);
-      }
+      // A canvas with no size (the keyboard squeezed it, or it had not finished loading) answers "data:," - not a signature.
+      if (signature.startsWith('data:image') && signature.length > 200) onSave(signature);
+      else onEmpty?.();
     };
 
     if (readOnly && existingSignature) {
@@ -54,13 +56,13 @@ export const SignatureBlock = forwardRef<any, Props>(
           <SignatureCanvas
             ref={canvasRef}
             onOK={handleOK}
-            onEmpty={() => {}}
+            onEmpty={() => onEmpty?.()}
             descriptionText=""
             clearText=""
             confirmText=""
             webStyle={`
               * { box-sizing: border-box; }
-              body, html { margin: 0; padding: 0; height: 100%; }
+              body, html { margin: 0; padding: 0; height: 100%; min-height: 190px; }
               .m-signature-pad {
                 box-shadow: none;
                 border: none;

@@ -1,20 +1,24 @@
+// Same palette as the ASEE website (static/app.css): brand red from the company logo, neutral surfaces, dark ink text.
+// Status colours stay separate from the brand so a warning never reads as branding.
 export const colors = {
-  primary: '#1A2332',
-  primaryLight: '#243044',
-  accent: '#E8730A',
-  accentLight: '#FFF3E8',
-  background: '#F5F6F8',
+  brand: '#D1003C',
+  brandDark: '#A8002F',
+  primary: '#16181D',
+  primaryLight: '#474B56',
+  accent: '#D1003C',
+  accentLight: '#FDECF1',
+  background: '#F5F5F7',
   surface: '#FFFFFF',
-  border: '#D1D5DB',
-  text: '#1F2937',
-  textSecondary: '#6B7280',
+  border: '#E6E6EB',
+  text: '#16181D',
+  textSecondary: '#636874',
   textLight: '#FFFFFF',
-  success: '#059669',
-  danger: '#DC2626',
-  locked: '#7C3AED',
-  highlight: '#E8730A',
-  highlightBg: '#FFF7ED',
-  rowHighlight: '#FEF3C7',
+  success: '#12794A',
+  danger: '#B42318',
+  locked: '#3E3A9E',
+  highlight: '#D1003C',
+  highlightBg: '#FDECF1',
+  rowHighlight: '#FBF0D9',
 };
 
 export const spacing = {

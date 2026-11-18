@@ -62,38 +62,22 @@ export function convertPressure(
   return Math.round(bar * 0.1 * 1000) / 1000;
 }
 
+/**
+ * A reading rewritten for the report's new units. `fieldType` is the type the checklist declares for the field:
+ * only 'temperature' and 'pressure' follow the report's units; every other field keeps its own fixed unit.
+ */
 export function convertChecklistValueOnUnitChange(
   value: string,
-  fieldKey: string | null,
+  fieldType: string | undefined,
   fromTemp: TempUnit,
   toTemp: TempUnit,
   fromPressure: PressureUnit,
   toPressure: PressureUnit,
 ): string {
-  if (!value.trim() || !fieldKey) return value;
-
   const num = parseFloat(value.replace(/[^\d.-]/g, ''));
   if (isNaN(num)) return value;
-
-  if (
-    fieldKey.includes('temp') ||
-    fieldKey.includes('temperature') ||
-    fieldKey.endsWith('_temp')
-  ) {
-    return String(convertTemperature(num, fromTemp, toTemp));
-  }
-
-  if (
-    fieldKey.includes('pressure') ||
-    fieldKey.includes('suction') ||
-    fieldKey.includes('discharge') ||
-    fieldKey === 'oil_pressure' ||
-    fieldKey.includes('high_pressure') ||
-    fieldKey.includes('low_pressure')
-  ) {
-    return String(convertPressure(num, fromPressure, toPressure));
-  }
-
+  if (fieldType === 'temperature') return String(convertTemperature(num, fromTemp, toTemp));
+  if (fieldType === 'pressure') return String(convertPressure(num, fromPressure, toPressure));
   return value;
 }
 
