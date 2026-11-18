@@ -1,7 +1,7 @@
 import { getFieldDefinitions } from '@/constants/checklists';
 import { COMPANY } from '@/constants/company';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
-import { ChecklistFieldDef, ChecklistItem, FullReport } from '@/types';
+import { ChecklistFieldDef, ChecklistItem, FullReport, Signature } from '@/types';
 import { visibleChecklistItems } from '@/utils/chillerFields';
 import { hasValue, reportNumber } from '@/utils/helpers';
 import { pressureUnitLabel, tempUnitLabel } from '@/utils/units';
@@ -56,6 +56,9 @@ function styles(): string {
 
     /* The outer table only repeats an empty top and bottom band on every printed page, so text never runs under the footer. */
     table.frame { width: 100%; border-collapse: collapse; }
+    /* the contract PDF: each unit's report, the cover and the signature page start on a new page */
+    table.frame.next { break-before: page; page-break-before: always; }
+    .statement { margin: 10px 0 4px; line-height: 1.6; }
     .top-space { height: 11mm; }
     .bottom-space { height: 24mm; }
     .content { padding: 0 12mm; }
@@ -174,43 +177,57 @@ function signature(en: string, ar: string, image: string | undefined, name: stri
   </div>`;
 }
 
-export async function generateReportHtml(report: FullReport): Promise<string> {
-  const machine = getMachineTypeInfo(report.type);
-  const [company, brand, photos] = await Promise.all([
+interface Logos {
+  company: string;
+  ciat: string;
+}
+
+async function loadLogos(): Promise<Logos> {
+  const [company, ciat] = await Promise.all([
     bundledLogo(require('@/assets/images/main_screen_icon.png')),
-    // Top left: the logo chosen for this report, or CIAT's when none was chosen.
-    report.logo_uri ? imageData(report.logo_uri) : bundledLogo(require('@/assets/images/ciat-logo.png')),
+    bundledLogo(require('@/assets/images/ciat-logo.png')),
+  ]);
+  return { company, ciat };
+}
+
+/** Top of a page: CIAT (or the logo chosen for the report) on the left, the company logo on the right, then the red title bar. */
+function pageHead(logos: Logos, brand: string, title: string, number: string): string {
+  const left = brand || logos.ciat;
+  return `<div class="head">
+        ${left ? `<img class="brand" src="${left}"/>` : '<span></span>'}
+        ${logos.company ? `<img class="company" src="${logos.company}"/>` : `<b>${escapeHtml(COMPANY.nameEn)}</b>`}
+      </div>
+      <div class="title">
+        <span class="name">${escapeHtml(title)}</span>
+        <span class="no">${escapeHtml(number)}</span>
+      </div>`;
+}
+
+/** Both signature boxes. */
+function signatureBoxes(signatures: Signature[], technicianName: string): string {
+  const tech = signatures.find((s) => s.type === 'technician');
+  const client = signatures.find((s) => s.type === 'client');
+  return `<div class="signs">
+        ${signature('Technician Signature', 'توقيع الفني', tech?.image_base64, tech?.signer_name || technicianName, tech?.signed_at || '')}
+        ${signature('Customer Signature', 'توقيع العميل', client?.image_base64, client?.signer_name || '', client?.signed_at || '')}
+      </div>`;
+}
+
+/** One report's pages. In the contract PDF the signatures are left out: they come once, on the last page. */
+async function reportSection(report: FullReport, logos: Logos, withSignatures: boolean): Promise<string> {
+  const machine = getMachineTypeInfo(report.type);
+  const [brand, photos] = await Promise.all([
+    imageData(report.logo_uri),
     Promise.all(report.photos.map(async (p) => ({ src: await imageData(p.uri), caption: p.caption }))),
   ]);
 
   const attention = report.attention_notes.filter((n) => hasValue(n.note) || hasValue(n.unit_no));
   const materials = report.materials.filter((m) => hasValue(m.description) || hasValue(m.qty));
   const shownPhotos = photos.filter((p) => p.src);
-  const tech = report.signatures.find((s) => s.type === 'technician');
-  const client = report.signatures.find((s) => s.type === 'client');
   const none = '<div class="text"><span class="empty">None — لا يوجد</span></div>';
 
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"/><style>${styles()}</style></head>
-<body>
-  <div class="footer">
-    <div>${escapeHtml(COMPANY.footerEn)}</div>
-    <div class="ar">${escapeHtml(COMPANY.footerAr)}</div>
-  </div>
-  <table class="frame">
-    <thead><tr><td class="top-space"></td></tr></thead>
-    <tfoot><tr><td class="bottom-space"></td></tr></tfoot>
-    <tbody><tr><td class="content">
-
-      <div class="head">
-        ${brand ? `<img class="brand" src="${brand}"/>` : '<span></span>'}
-        ${company ? `<img class="company" src="${company}"/>` : `<b>${escapeHtml(COMPANY.nameEn)}</b>`}
-      </div>
-      <div class="title">
-        <span class="name">${escapeHtml(machine.reportTitle(report.maintenance_type))}</span>
-        <span class="no">Report No. ${escapeHtml(reportNumber(report.id))}</span>
-      </div>
+  return `
+      ${pageHead(logos, brand, machine.reportTitle(report.maintenance_type), `Report No. ${reportNumber(report.id)}`)}
 
       <table class="grid">
         <tr>${pair('Client', 'العميل', report.client)}${pair('Date', 'التاريخ', report.date)}</tr>
@@ -257,15 +274,110 @@ export async function generateReportHtml(report: FullReport): Promise<string> {
             </div>`
       }
 
-      <div class="signs">
-        ${signature('Technician Signature', 'توقيع الفني', tech?.image_base64, tech?.signer_name || report.technician, tech?.signed_at || '')}
-        ${signature('Customer Signature', 'توقيع العميل', client?.image_base64, client?.signer_name || '', client?.signed_at || '')}
-      </div>
+      ${withSignatures ? signatureBoxes(report.signatures, report.technician) : ''}`;
+}
 
+/** The printed document. Every section is its own frame (header space, footer space), and each after the first starts a new page. */
+function documentHtml(sections: string[]): string {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"/><style>${styles()}</style></head>
+<body>
+  <div class="footer">
+    <div>${escapeHtml(COMPANY.footerEn)}</div>
+    <div class="ar">${escapeHtml(COMPANY.footerAr)}</div>
+  </div>
+  ${sections
+    .map(
+      (section, i) => `<table class="frame${i > 0 ? ' next' : ''}">
+    <thead><tr><td class="top-space"></td></tr></thead>
+    <tfoot><tr><td class="bottom-space"></td></tr></tfoot>
+    <tbody><tr><td class="content">${section}
     </td></tr></tbody>
-  </table>
+  </table>`,
+    )
+    .join('\n')}
 </body>
 </html>`;
+}
+
+export async function generateReportHtml(report: FullReport): Promise<string> {
+  return documentHtml([await reportSection(report, await loadLogos(), true)]);
+}
+
+/** One unit on the contract PDF's cover. The unit's report is left out of the PDF when it has none yet. */
+export interface ContractPdfUnit {
+  name: string;
+  serial: string;
+  equipment: string;
+  status: 'not_started' | 'draft' | 'ready' | 'signed';
+  report: FullReport | null;
+}
+
+export interface ContractPdfInfo {
+  number: string;
+  title: string;
+  client: string;
+  date: string;
+  technician: string;
+}
+
+const STATUS_TEXT: Record<ContractPdfUnit['status'], string> = {
+  not_started: 'Not started — لم يبدأ',
+  draft: 'Draft — مسودة',
+  ready: 'Ready — جاهز للتوقيع',
+  signed: 'Signed — موقّع',
+};
+
+/**
+ * The whole contract as one PDF: a cover with the list of units, each unit's report one after another,
+ * then one page with the technician's and the client's signatures.
+ */
+export async function generateContractHtml(info: ContractPdfInfo, units: ContractPdfUnit[]): Promise<string> {
+  const logos = await loadLogos();
+  const withReport = units.filter((u) => u.report);
+  const number = info.number ? `Contract No. ${info.number}` : '';
+
+  const cover = `
+      ${pageHead(logos, '', 'Contract Maintenance Report', number)}
+      <table class="grid">
+        <tr>${pair('Contract', 'العقد', info.number)}${pair('Date', 'التاريخ', info.date)}</tr>
+        <tr>${pair('Title', 'العنوان', info.title)}${pair('Units', 'عدد المعدات', String(units.length))}</tr>
+        <tr>${pair('Client', 'العميل', info.client)}${pair('Technician', 'الفني', info.technician)}</tr>
+      </table>
+      ${heading('Units', 'المعدات')}
+      <table class="grid">
+        <tr><th style="width:6%">#</th><th>Unit</th><th style="width:20%">Equipment</th><th style="width:20%">Serial No.</th><th style="width:22%">Status</th></tr>
+        ${units
+          .map(
+            (u, i) => `<tr><td>${i + 1}</td><td>${shown(u.name)}</td><td>${escapeHtml(u.equipment)}</td>
+              <td>${shown(u.serial)}</td><td>${STATUS_TEXT[u.status]}</td></tr>`,
+          )
+          .join('')}
+      </table>`;
+
+  const sections = await Promise.all(withReport.map((u) => reportSection(u.report!, logos, false)));
+
+  // "Sign all" puts the same two signatures in every signed report, so the first one holding a client signature has them.
+  const signed = withReport.find((u) => u.report!.signatures.some((s) => s.type === 'client' && s.image_base64));
+  const signedNames = withReport.filter((u) => u.status === 'signed').map((u) => escapeHtml(u.name || u.serial));
+  const signaturePage = `
+      ${pageHead(logos, '', 'Signatures', number)}
+      ${heading('Signatures', 'التوقيعات')}
+      <div class="statement">
+        ${signedNames.length
+          ? `Signed for ${signedNames.length} of ${units.length} units: ${signedNames.join(', ')}.`
+          : 'Not signed yet.'}
+        <div class="ar">${signedNames.length ? `تم التوقيع على ${signedNames.length} من ${units.length} معدات.` : 'لم يتم التوقيع بعد.'}</div>
+      </div>
+      ${signatureBoxes(signed?.report?.signatures ?? [], info.technician)}`;
+
+  return documentHtml([cover, ...sections, signaturePage]);
+}
+
+export async function exportContractPdf(info: ContractPdfInfo, units: ContractPdfUnit[]): Promise<string> {
+  const { uri } = await Print.printToFileAsync({ html: await generateContractHtml(info, units) });
+  return uri;
 }
 
 export async function exportReportPdf(report: FullReport): Promise<string> {
