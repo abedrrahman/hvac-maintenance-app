@@ -14,6 +14,26 @@ export function formatDate(date: Date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
+const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Base64 text (with or without a "data:image/png;base64," prefix) to bytes, to write a picture to a file. */
+export function base64ToBytes(text: string): Uint8Array {
+  const clean = text.replace(/^data:[^,]*,/, '').replace(/[^A-Za-z0-9+/]/g, '');
+  const bytes = new Uint8Array(Math.floor((clean.length * 6) / 8));
+  let bits = 0;
+  let value = 0;
+  let at = 0;
+  for (const char of clean) {
+    value = (value << 6) | BASE64.indexOf(char);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes[at++] = (value >> bits) & 0xff;
+    }
+  }
+  return bytes;
+}
+
 export function formatDisplayDate(dateStr: string): string {
   if (!dateStr) return '';
   const parts = dateStr.split('-');

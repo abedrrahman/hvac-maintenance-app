@@ -2,177 +2,230 @@ import { Button } from '@/components/Button';
 import { SignatureModal } from '@/components/SignatureModal';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import { findMachines } from '@/db/repositories/machines';
-import {
-  VisitReport,
-  getVisitReports,
-  lockVisit,
-  saveVisitSignature,
-  startVisit,
-} from '@/db/repositories/reports';
+import { getFullReport, isReadyToSign, signContractReports } from '@/db/repositories/reports';
+import { VisitUnit, getContractUnits, machineForVisit } from '@/db/repositories/visits';
+import { ContractPdfUnit, exportContractPdf, sharePdf } from '@/services/pdfGenerator';
+import { VISIT_STATE_TEXT, openVisitReport } from '@/services/visits';
 import { syncNow } from '@/services/webSync';
 import { formatDate } from '@/utils/helpers';
-import { loadGlobalUnits } from '@/utils/units';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
-function statusOf(report: VisitReport): string {
-  if (report.uploaded_at) return '✓ تم الرفع إلى الموقع';
-  if (report.status === 'locked') return '🔒 مقفل — بانتظار الرفع';
-  return report.filled === 0 ? 'لم يُملأ بعد' : `قيد التعبئة — ${report.filled} قراءة`;
-}
+type Signed = { image: string; name: string };
 
 /**
- * One contract visit: a report for each unit the website scheduled at this client for the day.
- * The reports are filled one by one, then signed once, locked and sent together from here.
+ * One contract: a report for each of its units, filled one by one, then signed once by the technician and the client.
+ * "Sign all" puts the two signatures in every chosen report, gives them one batch id and locks them.
  */
-export default function VisitScreen() {
+export default function ContractScreen() {
   const router = useRouter();
-  const { group = '' } = useLocalSearchParams<{ group: string }>();
-  // the group is "date|client"
-  const date = group.slice(0, group.indexOf('|'));
-  const client = group.slice(group.indexOf('|') + 1);
+  const { contract = '' } = useLocalSearchParams<{ contract: string }>();
+  const contractId = Number(contract);
 
-  const [reports, setReports] = useState<VisitReport[]>([]);
-  const [missing, setMissing] = useState(0);
+  const [units, setUnits] = useState<VisitUnit[]>([]);
+  // ready reports the technician unticked; every other ready report is chosen
+  const [unticked, setUnticked] = useState<Set<string>>(new Set());
   const [signing, setSigning] = useState<'technician' | 'client' | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [technician, setTechnician] = useState<Signed | null>(null);
+  const [client, setClient] = useState<Signed | null>(null);
+  const [busy, setBusy] = useState<'sign' | 'pdf' | null>(null);
 
-  const load = useCallback(() => {
-    const list = getVisitReports(group);
-    const have = new Set(list.map((r) => r.machine_id));
-    setReports(list);
-    setMissing(findMachines({ client, visitDate: date }).filter((m) => !have.has(m.id)).length);
-  }, [group, client, date]);
-
+  const load = useCallback(() => setUnits(getContractUnits(contractId)), [contractId]);
   useFocusEffect(load);
 
-  const open = reports.filter((r) => r.status === 'open');
-  const techSigned = open.length > 0 && open.every((r) => r.tech_signed);
-  const clientSigned = open.length > 0 && open.every((r) => r.client_signed);
+  const first = units.find((u) => u.visit)?.visit ?? null;
+  const anyReport = units.find((u) => u.report)?.report ?? null;
+  const number = first?.contract_number || anyReport?.contract_number || '';
+  const title = first?.contract_title || anyReport?.contract_title || '';
+  const clientName = first?.client_name || anyReport?.client || '';
+  const date = (first?.scheduled_date || anyReport?.date || '').slice(0, 10);
 
-  const handleStart = async () => {
-    setBusy(true);
-    try {
-      await startVisit(group, findMachines({ client, visitDate: date }), await loadGlobalUnits());
-      load();
-    } finally {
-      setBusy(false);
+  const ready = units.filter((u) => u.report && isReadyToSign(u.report));
+  const chosen = ready.filter((u) => !unticked.has(u.report!.id));
+  const signedCount = units.filter((u) => u.state === 'signed').length;
+  const techName = units.find((u) => u.report?.technician)?.report?.technician ?? '';
+
+  const toggle = (reportId: string) =>
+    setUnticked((current) => {
+      const next = new Set(current);
+      if (next.has(reportId)) next.delete(reportId);
+      else next.add(reportId);
+      return next;
+    });
+
+  const openUnit = async (unit: VisitUnit) => {
+    if (unit.report) {
+      router.push((unit.report.status === 'locked' ? `/report/${unit.report.id}/view` : `/report/${unit.report.id}/3`) as never);
+      return;
     }
+    const page = unit.visit ? await openVisitReport(unit.visit) : null;
+    if (page) router.push(page as never);
+    else Alert.alert('تنبيه', 'هذه المعدة غير موجودة على الهاتف بعد. افتح الإعدادات واضغط "مزامنة الآن" ثم حاول مرة أخرى.');
   };
 
-  const lockAndSend = async () => {
-    setBusy(true);
+  const signAll = async () => {
+    if (!technician || !client) return;
+    setBusy('sign');
     try {
-      lockVisit(group);
+      signContractReports(chosen.map((u) => u.report!.id), technician, client, formatDate());
+      setTechnician(null);
+      setClient(null);
+      setUnticked(new Set());
       load();
-      const result = await syncNow({ manual: true });
+      const result = await syncNow();
       load();
       Alert.alert(
-        result.waiting === 0 ? 'تم الإرسال' : 'تم القفل',
+        'تم التوقيع',
         result.waiting === 0
-          ? `تم قفل التقارير ورفعها إلى الموقع (${result.uploaded}).`
-          : `تم قفل التقارير. بانتظار الرفع: ${result.waiting} — سترفع عند توفر الإنترنت.`,
+          ? `تم توقيع ${chosen.length} تقرير وقفلها ورفعها إلى الموقع.`
+          : `تم توقيع ${chosen.length} تقرير وقفلها. سترفع إلى الموقع عند توفر الإنترنت.`,
       );
     } catch (error) {
       Alert.alert('خطأ', error instanceof Error ? error.message : String(error));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
-  const handleLock = () => {
-    if (!clientSigned) {
-      Alert.alert('تنبيه', 'يجب توقيع العميل قبل قفل التقارير.');
+  const confirmSignAll = () => {
+    if (!technician || !client) {
+      Alert.alert('تنبيه', 'يجب توقيع الفني والعميل أولاً.');
       return;
     }
-    const empty = open.filter((r) => r.filled === 0);
     Alert.alert(
-      'قفل وإرسال كل التقارير',
-      (empty.length
-        ? `تقارير لم تُملأ بعد (${empty.length}): ${empty.map((r) => r.unit_name).join('، ')}\n\n`
-        : '') + `سيتم قفل ${open.length} تقرير نهائياً وإرسالها إلى الموقع. متابعة؟`,
+      'توقيع الكل',
+      `سيتم وضع التوقيعين في ${chosen.length} تقرير وقفلها نهائياً:\n${chosen.map((u) => u.unitName).join('، ')}\n\nمتابعة؟`,
       [
         { text: 'إلغاء', style: 'cancel' },
-        { text: 'قفل وإرسال', onPress: lockAndSend },
+        { text: 'توقيع وقفل', onPress: signAll },
       ],
     );
   };
 
+  const contractPdf = async () => {
+    setBusy('pdf');
+    try {
+      const pdfUnits: ContractPdfUnit[] = units.map((u) => {
+        const report = u.report ? getFullReport(u.report.id) : null;
+        const machine = u.visit ? machineForVisit(u.visit) : null;
+        return {
+          name: u.unitName,
+          serial: report?.serial_no || machine?.serial_number || '',
+          equipment: getMachineTypeInfo(report?.type ?? machine?.type ?? 'custom').labelEn,
+          status: u.state,
+          report,
+        };
+      });
+      const uri = await exportContractPdf(
+        { number, title, client: clientName, date, technician: techName },
+        pdfUnits,
+      );
+      await sharePdf(uri);
+    } catch (error) {
+      Alert.alert('خطأ', error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <View style={styles.container}>
-      <Stack.Screen options={{ title: client || 'زيارة عقد' }} />
+      <Stack.Screen options={{ title: number ? `عقد ${number}` : 'زيارة عقد' }} />
       <FlatList
-        data={reports}
-        keyExtractor={(item) => item.id}
+        data={units}
+        keyExtractor={(item) => String(item.unitId)}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.head}>
-            <Text style={styles.note}>زيارة عقد — {date}</Text>
-            {missing > 0 ? (
-              <Button
-                title={`بدء الزيارة: إنشاء ${missing} تقرير`}
-                onPress={handleStart}
-                variant="accent"
-                loading={busy}
-              />
-            ) : null}
+            {title ? <Text style={styles.title}>{title}</Text> : null}
+            <Text style={styles.note}>
+              {clientName || 'بدون عميل'}
+              {date ? ` — ${date}` : ''}
+            </Text>
+            <Text style={styles.note}>
+              المعدات: {units.length} · جاهز للتوقيع: {ready.length} · تم التوقيع: {signedCount}
+            </Text>
+            <Button title="PDF للعقد / Contract PDF" onPress={contractPdf} variant="secondary" loading={busy === 'pdf'} />
           </View>
         }
-        ListEmptyComponent={
-          missing === 0 ? <Text style={styles.note}>لا توجد معدات مجدولة لهذه الزيارة.</Text> : null
-        }
-        renderItem={({ item, index }) => (
-          <Pressable
-            style={styles.card}
-            onPress={() =>
-              router.push(
-                (item.status === 'locked' ? `/report/${item.id}/view` : `/report/${item.id}/3`) as never,
-              )
-            }>
-            <Text style={styles.unit}>
-              {index + 1}. {item.unit_name || 'معدة بدون اسم'}
-            </Text>
-            <Text style={styles.type}>{getMachineTypeInfo(item.type).labelAr}</Text>
-            <Text style={[styles.status, item.status === 'open' && item.filled === 0 && styles.statusEmpty]}>
-              {statusOf(item)}
-            </Text>
-          </Pressable>
-        )}
+        ListEmptyComponent={<Text style={styles.note}>لا توجد معدات لهذا العقد على الهاتف. جرّب المزامنة.</Text>}
+        renderItem={({ item, index }) => {
+          const isReady = item.state === 'ready';
+          const ticked = isReady && !unticked.has(item.report!.id);
+          return (
+            <View style={[styles.card, ticked && styles.cardChosen]}>
+              {isReady ? (
+                <Pressable
+                  style={styles.tick}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: ticked }}
+                  onPress={() => toggle(item.report!.id)}>
+                  <Text style={[styles.tickText, ticked && styles.tickOn]}>{ticked ? '☑' : '☐'}</Text>
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.cardBody} onPress={() => openUnit(item)}>
+                <Text style={styles.unit}>
+                  {index + 1}. {item.unitName || 'معدة بدون اسم'}
+                </Text>
+                {item.report ? (
+                  <Text style={styles.type}>{getMachineTypeInfo(item.report.type).labelAr}</Text>
+                ) : null}
+                <Text style={[styles.status, styles[item.state]]}>
+                  {VISIT_STATE_TEXT[item.state]}
+                  {item.state === 'draft' && item.report ? ` — ناقص ${item.report.empty_rows} قراءة` : ''}
+                  {item.state === 'signed' && item.report?.uploaded_at ? ' — تم الرفع' : ''}
+                </Text>
+              </Pressable>
+            </View>
+          );
+        }}
         ListFooterComponent={
-          open.length > 0 ? (
+          ready.length > 0 ? (
             <View style={styles.foot}>
-              <Text style={styles.note}>توقيع واحد لكل تقارير الزيارة ({open.length})</Text>
+              <Text style={styles.footTitle}>توقيع الكل / Sign all</Text>
+              <Text style={styles.note}>
+                التقارير المختارة: {chosen.length} من {ready.length} جاهزة. يوقّع العميل مرة واحدة لكل التقارير المختارة.
+              </Text>
               <View style={styles.signs}>
                 <View style={styles.sign}>
                   <Button
-                    title={techSigned ? '✓ توقيع الفني' : 'توقيع الفني'}
+                    title={technician ? `✓ ${technician.name || 'توقيع الفني'}` : 'توقيع الفني'}
                     onPress={() => setSigning('technician')}
                     variant="secondary"
                   />
                 </View>
                 <View style={styles.sign}>
                   <Button
-                    title={clientSigned ? '✓ توقيع العميل' : 'توقيع العميل'}
+                    title={client ? `✓ ${client.name || 'توقيع العميل'}` : 'توقيع العميل'}
                     onPress={() => setSigning('client')}
                     variant="secondary"
                   />
                 </View>
               </View>
-              <Button title="قفل وإرسال كل التقارير" onPress={handleLock} variant="accent" loading={busy} />
+              <Button
+                title={`توقيع وقفل ${chosen.length} تقرير`}
+                onPress={confirmSignAll}
+                variant="accent"
+                disabled={chosen.length === 0 || !technician || !client}
+                loading={busy === 'sign'}
+              />
             </View>
+          ) : units.some((u) => u.state === 'draft') ? (
+            <Text style={[styles.note, styles.foot]}>
+              يصبح التقرير جاهزاً للتوقيع عندما تُملأ كل قراءاته. الصف الذي لا ينطبق يمكن حذفه بالضغط المطوّل عليه.
+            </Text>
           ) : null
         }
       />
       <SignatureModal
         type={signing}
-        defaultName={signing === 'technician' ? (open.find((r) => r.technician)?.technician ?? '') : ''}
+        defaultName={signing === 'technician' ? technician?.name || techName : client?.name ?? ''}
         onClose={() => setSigning(null)}
-        onSave={(signature, name) => {
-          saveVisitSignature(group, signing!, signature, name, formatDate());
+        onSave={(image, name) => {
+          if (signing === 'technician') setTechnician({ image, name });
+          else setClient({ image, name });
           setSigning(null);
-          load();
         }}
       />
     </View>
@@ -183,20 +236,31 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   list: { padding: spacing.md, paddingBottom: spacing.xl * 2 },
   head: { gap: spacing.sm, marginBottom: spacing.md },
+  title: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text, textAlign: 'right' },
   foot: { gap: spacing.sm, marginTop: spacing.md },
+  footTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.brandDark, textAlign: 'right' },
   note: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'right' },
   card: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
     backgroundColor: colors.surface,
     borderRadius: 12,
-    padding: spacing.md,
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
   },
+  cardChosen: { borderColor: colors.brand, backgroundColor: colors.accentLight },
+  cardBody: { flex: 1, padding: spacing.md },
+  tick: { paddingHorizontal: spacing.md, paddingVertical: spacing.md },
+  tickText: { fontSize: 26, color: colors.textSecondary },
+  tickOn: { color: colors.brand },
   unit: { fontSize: fontSize.md, fontWeight: '700', color: colors.text, textAlign: 'right' },
   type: { fontSize: fontSize.sm, color: colors.accent, textAlign: 'right', marginTop: 2 },
-  status: { fontSize: fontSize.sm, color: colors.success, textAlign: 'right', marginTop: 4 },
-  statusEmpty: { color: colors.textSecondary },
+  status: { fontSize: fontSize.sm, textAlign: 'right', marginTop: 4 },
+  not_started: { color: colors.textSecondary },
+  draft: { color: colors.primaryLight },
+  ready: { color: colors.brand, fontWeight: '700' },
+  signed: { color: colors.success },
   signs: { flexDirection: 'row', gap: spacing.sm },
   sign: { flex: 1 },
 });

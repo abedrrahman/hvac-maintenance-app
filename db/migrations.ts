@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const CURRENT_VERSION = 6;
+const CURRENT_VERSION = 7;
 
 function columnExists(
   db: SQLite.SQLiteDatabase,
@@ -236,6 +236,40 @@ function migrateV6(db: SQLite.SQLiteDatabase): void {
   }
 }
 
+// V7: the visits the website sends (replaced on every sync), and each report's visit and contract.
+// The contract's number and title are copied onto the report: the website stops sending a visit once it is done,
+// and the report must still know which contract it belongs to.
+function migrateV7(db: SQLite.SQLiteDatabase): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS visits (
+      id INTEGER PRIMARY KEY NOT NULL,
+      number TEXT DEFAULT '',
+      unit_id INTEGER,
+      client_id INTEGER,
+      client_name TEXT DEFAULT '',
+      scheduled_date TEXT DEFAULT '',
+      type TEXT DEFAULT '',
+      status TEXT DEFAULT '',
+      overdue INTEGER DEFAULT 0,
+      assigned_to_me INTEGER DEFAULT 0,
+      contract_id INTEGER,
+      contract_number TEXT DEFAULT '',
+      contract_title TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_visits_contract ON visits(contract_id);
+  `);
+  const add = (column: string, type: string) => {
+    if (!columnExists(db, 'reports', column)) db.execSync(`ALTER TABLE reports ADD COLUMN ${column} ${type}`);
+  };
+  add('visit_id', 'INTEGER');
+  add('contract_id', 'INTEGER');
+  add('contract_number', "TEXT DEFAULT ''");
+  add('contract_title', "TEXT DEFAULT ''");
+  add('contract_batch_id', 'TEXT');
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_visit_id ON reports(visit_id)');
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_contract ON reports(contract_id)');
+}
+
 export function runMigrations(db: SQLite.SQLiteDatabase): void {
   const version = getSchemaVersion(db);
 
@@ -267,6 +301,11 @@ export function runMigrations(db: SQLite.SQLiteDatabase): void {
   if (getSchemaVersion(db) < 6) {
     migrateV6(db);
     setSchemaVersion(db, 6);
+  }
+
+  if (getSchemaVersion(db) < 7) {
+    migrateV7(db);
+    setSchemaVersion(db, 7);
   }
 
   if (getSchemaVersion(db) < CURRENT_VERSION) {

@@ -211,15 +211,6 @@ export function getClientSummaries(country?: string): ClientSummary[] {
   );
 }
 
-/** Clients whose contract visit is scheduled for this day, with how many units it covers. */
-export function getVisitsDue(date: string): { client_name: string; units: number }[] {
-  return getDatabase().getAllSync<{ client_name: string; units: number }>(
-    `SELECT client_name, COUNT(*) AS units FROM machines WHERE web_visit_date = ?
-     GROUP BY client_name ORDER BY client_name COLLATE NOCASE`,
-    [date],
-  );
-}
-
 /** Units of one client, units matching a search (capped, the full list holds hundreds), or units with a visit on a day. */
 export function findMachines(options: {
   client?: string;

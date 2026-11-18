@@ -128,8 +128,32 @@ export interface Report {
   /** When the locked report reached the website; empty while it waits for a connection. */
   uploaded_at: string | null;
   upload_error: string;
-  /** Reports made together for one contract visit share this ("date|client"): signed once, locked and sent together. */
+  /** Reports of the older contract-visit screen ("date|client"). Kept for those reports; new ones use the contract. */
   visit_group: string | null;
+  /** The website visit this report closes. */
+  visit_id: number | null;
+  contract_id: number | null;
+  contract_number: string;
+  contract_title: string;
+  /** The same for every report signed together for one contract: one client signature for all of them. */
+  contract_batch_id: string | null;
+}
+
+/** A visit from the website's sync: a unit to service on a day, on its own or as part of a contract. */
+export interface Visit {
+  id: number;
+  number: string;
+  unit_id: number;
+  client_id: number | null;
+  client_name: string;
+  scheduled_date: string;
+  type: string;
+  status: string;
+  overdue: number;
+  assigned_to_me: number;
+  contract_id: number | null;
+  contract_number: string;
+  contract_title: string;
 }
 
 export interface ChecklistItem {

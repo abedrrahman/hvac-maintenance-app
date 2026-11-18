@@ -6,7 +6,7 @@
  * The app keeps working with no connection; anything that fails is tried again on the next sync.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { File } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 import { getDatabase } from '@/db/database';
 import { replaceAlarms } from '@/db/repositories/alarms';
@@ -17,8 +17,9 @@ import {
   markReportUploadError,
   markReportUploaded,
 } from '@/db/repositories/reports';
-import { MachineType, WebDocument } from '@/types';
-import { formatDate } from '@/utils/helpers';
+import { replaceVisits } from '@/db/repositories/visits';
+import { MachineType, Signature, WebDocument } from '@/types';
+import { base64ToBytes, formatDate } from '@/utils/helpers';
 import { exportReportPdf } from './pdfGenerator';
 
 const KEY = '@hvac_web_link';
@@ -219,7 +220,19 @@ interface SyncPayload {
     document_ids: number[];
   }[];
   documents: { id: number; name_en: string; type: string; url: string; file_name?: string; size?: number }[];
-  visits: { id: number; unit_id: number; scheduled_date: string }[];
+  visits: {
+    id: number;
+    number?: string | number;
+    unit_id: number;
+    client_id?: number;
+    scheduled_date: string;
+    type?: string;
+    overdue?: boolean;
+    status?: string;
+    /** True when this user is the technician the office chose. */
+    assigned_to_me?: boolean;
+    contract?: { id: number; number?: string | number; title?: string } | null;
+  }[];
 }
 
 export async function downloadSiteData(link: WebLink): Promise<number> {
@@ -246,6 +259,26 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
   });
 
   // One transaction for the whole list: saving 800+ units one by one froze the app for seconds at every start.
+  getDatabase().withTransactionSync(() => replaceVisits(
+    data.visits.map((v) => {
+      const client = v.client_id != null ? clients.get(v.client_id) : undefined;
+      return {
+        id: v.id,
+        number: String(v.number ?? ''),
+        unit_id: v.unit_id,
+        client_id: v.client_id ?? null,
+        client_name: client?.name_en ?? '',
+        scheduled_date: v.scheduled_date ?? '',
+        type: v.type ?? '',
+        status: v.status ?? '',
+        overdue: v.overdue ? 1 : 0,
+        assigned_to_me: v.assigned_to_me ? 1 : 0,
+        contract_id: v.contract?.id ?? null,
+        contract_number: String(v.contract?.number ?? ''),
+        contract_title: v.contract?.title ?? '',
+      };
+    }),
+  ));
   getDatabase().withTransactionSync(() => data.units.forEach((u) => {
     const docs: WebDocument[] = u.document_ids
       .map((id) => documents.get(id))
@@ -289,12 +322,31 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
   return data.units.length;
 }
 
+/**
+ * Each signature as a picture file, named signature_technician.png / signature_client.png as the website expects.
+ * One folder per report, so two reports never share a file. The folder is removed after the upload.
+ */
+function signatureFiles(folder: Directory, signatures: Signature[]): File[] {
+  if (folder.exists) folder.delete();
+  folder.create({ intermediates: true });
+  return signatures
+    .filter((s) => s.image_base64.startsWith('data:image'))
+    .slice(0, 4)
+    .map((s) => {
+      const extension = s.image_base64.startsWith('data:image/jpeg') ? 'jpg' : 'png';
+      const file = new File(folder, `signature_${s.type}.${extension}`);
+      file.create({ overwrite: true });
+      file.write(base64ToBytes(s.image_base64));
+      return file;
+    });
+}
+
 async function uploadReport(link: WebLink, reportId: string): Promise<void> {
   const full = getFullReport(reportId);
   if (!full) return;
   const machine = full.machine_id ? getMachineById(full.machine_id) : null;
-  // Signatures are inside the PDF; sending their image data again would only make the upload heavier.
-  const { signatures: _signatures, photos, ...report } = full;
+  // The signatures go as picture files below, not as text inside the JSON.
+  const { signatures, photos, ...report } = full;
 
   const form = new FormData();
   form.append(
@@ -302,7 +354,9 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
     JSON.stringify({
       ...report,
       unit_id: machine?.web_id ?? '',
-      visit_id: machine?.web_visit_id ?? '',
+      // the visit the report was made for; reports started from the unit page fall back to the unit's next visit
+      visit_id: report.visit_id ?? machine?.web_visit_id ?? '',
+      contract_batch_id: report.contract_batch_id ?? '',
     }),
   );
   const pdfUri = await exportReportPdf(full);
@@ -310,14 +364,20 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
   form.append('pdf', new File(pdfUri) as never);
   // A photo deleted from the phone is left out, so one missing picture does not block the report.
   photos.map((p) => new File(p.uri)).filter((f) => f.exists).forEach((f) => form.append('photo', f as never));
+  const signatureFolder = new Directory(Paths.cache, 'upload-signatures', reportId);
+  signatureFiles(signatureFolder, signatures).forEach((f) => form.append('signature', f as never));
 
-  const response = await request(`${link.baseUrl}/api/reports/`, {
-    method: 'POST',
-    headers: { Authorization: `Token ${link.token}` },
-    body: form,
-  }, UPLOAD_TIMEOUT_MS);
-  if ([400, 403, 404].includes(response.status)) throw new RefusedError(await errorText(response));
-  if (!response.ok) throw new Error(await errorText(response));
+  try {
+    const response = await request(`${link.baseUrl}/api/reports/`, {
+      method: 'POST',
+      headers: { Authorization: `Token ${link.token}` },
+      body: form,
+    }, UPLOAD_TIMEOUT_MS);
+    if ([400, 403, 404].includes(response.status)) throw new RefusedError(await errorText(response));
+    if (!response.ok) throw new Error(await errorText(response));
+  } finally {
+    if (signatureFolder.exists) signatureFolder.delete();
+  }
 }
 
 let running = false;

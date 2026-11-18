@@ -1,13 +1,14 @@
 import { AseeLogo } from '@/components/AseeLogo';
 import { ReportCard } from '@/components/ReportCard';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import { getVisitsDue } from '@/db/repositories/machines';
-import { getReportsToUpload, searchReportsGlobal, visitGroupOf } from '@/db/repositories/reports';
+import { getReportsToUpload, searchReportsGlobal } from '@/db/repositories/reports';
+import { VisitCard, getVisitCards } from '@/db/repositories/visits';
+import { VISIT_STATE_TEXT, openVisitReport } from '@/services/visits';
 import { WebLink, clearNewSites, loadWebLink } from '@/services/webSync';
-import { formatDate } from '@/utils/helpers';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
+  Alert,
   I18nManager,
   Pressable,
   ScrollView,
@@ -25,7 +26,7 @@ export default function HomeScreen() {
   const [results, setResults] = useState<ReturnType<typeof searchReportsGlobal>>([]);
   const [link, setLink] = useState<WebLink | null>(null);
   const [waiting, setWaiting] = useState(0);
-  const [visits, setVisits] = useState<ReturnType<typeof getVisitsDue>>([]);
+  const [visits, setVisits] = useState<VisitCard[]>([]);
 
   // Each time the home screen comes back: what the last sync found, and what still waits to upload.
   useFocusEffect(
@@ -33,7 +34,7 @@ export default function HomeScreen() {
       const load = () => {
         loadWebLink().then(setLink);
         setWaiting(getReportsToUpload().length);
-        setVisits(getVisitsDue(formatDate()));
+        setVisits(getVisitCards());
       };
       load();
       // shortcut: looked at again every 5 seconds while this screen shows, because the download from the
@@ -58,6 +59,27 @@ export default function HomeScreen() {
         <AseeLogo large />
       </View>
 
+      {visits.length > 0 ? (
+        <View style={styles.visits}>
+          <Text style={styles.visitsTitle}>زياراتي / My visits</Text>
+          {visits.map((card) => (
+            <VisitCardView
+              key={card.key}
+              card={card}
+              onPress={async () => {
+                if (card.kind === 'contract') {
+                  router.push({ pathname: '/visit', params: { contract: String(card.contractId) } } as never);
+                  return;
+                }
+                const page = await openVisitReport(card.visit);
+                if (page) router.push(page as never);
+                else Alert.alert('تنبيه', 'هذه المعدة غير موجودة على الهاتف بعد. افتح الإعدادات واضغط "مزامنة الآن".');
+              }}
+            />
+          ))}
+        </View>
+      ) : null}
+
       {link && (link.newSites?.length || link.newUnits) ? (
         <Pressable
           style={styles.notice}
@@ -78,23 +100,6 @@ export default function HomeScreen() {
           <Text style={styles.noticeText}>اضغط للعرض</Text>
         </Pressable>
       ) : null}
-
-      {visits.map((visit) => (
-        <Pressable
-          key={visit.client_name}
-          style={styles.notice}
-          onPress={() =>
-            router.push({
-              pathname: '/visit',
-              params: { group: visitGroupOf(formatDate(), visit.client_name) },
-            } as never)
-          }>
-          <Text style={styles.noticeTitle}>زيارة عقد اليوم: {visit.client_name || 'بدون عميل'}</Text>
-          <Text style={styles.noticeText}>
-            {visit.units} معدة — اضغط لتعبئة التقارير وتوقيعها مرة واحدة
-          </Text>
-        </Pressable>
-      ))}
 
       {link && waiting > 0 ? (
         <Text style={styles.waiting}>
@@ -166,6 +171,46 @@ export default function HomeScreen() {
   );
 }
 
+/** Why the visit is high on the list, as a short tag. */
+function visitTag(card: VisitCard): string {
+  if (card.rank === 0) return 'بدأها المكتب';
+  if (card.rank === 1) return 'اليوم';
+  return '';
+}
+
+function VisitCardView({ card, onPress }: { card: VisitCard; onPress: () => void }) {
+  const tag = visitTag(card);
+  const overdue = card.kind === 'contract' ? card.overdue : !!card.visit.overdue;
+  const date = card.kind === 'contract' ? card.date : card.visit.scheduled_date.slice(0, 10);
+  return (
+    <Pressable style={[styles.visitCard, card.rank === 0 && styles.visitCardStarted]} onPress={onPress}>
+      <View style={styles.visitTop}>
+        <Text style={styles.visitName} numberOfLines={1}>
+          {card.kind === 'contract'
+            ? `عقد ${card.number || ''} — ${card.client || 'بدون عميل'}`
+            : card.unit.unitName || 'معدة بدون اسم'}
+        </Text>
+        {tag ? <Text style={styles.visitTag}>{tag}</Text> : null}
+        {overdue ? <Text style={[styles.visitTag, styles.visitLate]}>متأخر</Text> : null}
+      </View>
+      {card.kind === 'contract' ? (
+        <>
+          {card.title ? <Text style={styles.visitText}>{card.title}</Text> : null}
+          <Text style={styles.visitText}>
+            {card.units} معدات · تم {card.done} من {card.units}
+            {date ? ` · ${date}` : ''}
+          </Text>
+        </>
+      ) : (
+        <Text style={styles.visitText}>
+          {card.visit.client_name || 'بدون عميل'}
+          {date ? ` · ${date}` : ''} · {VISIT_STATE_TEXT[card.unit.state]}
+        </Text>
+      )}
+    </Pressable>
+  );
+}
+
 function MenuButton({
   title,
   subtitle,
@@ -224,6 +269,58 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   noticeText: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  visits: {
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  visitsTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: colors.text,
+    textAlign: 'right',
+  },
+  visitCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  visitCardStarted: {
+    borderColor: colors.brand,
+    backgroundColor: colors.accentLight,
+  },
+  visitTop: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  visitName: {
+    flex: 1,
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.text,
+    textAlign: 'right',
+  },
+  visitTag: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textLight,
+    backgroundColor: colors.brand,
+    borderRadius: 8,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    overflow: 'hidden',
+  },
+  visitLate: {
+    backgroundColor: colors.danger,
+  },
+  visitText: {
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     textAlign: 'right',

@@ -35,6 +35,7 @@ import {
   ReportFilters,
   Signature,
   TempUnit,
+  Visit,
   VoltageTypeConfig,
 } from '@/types';
 import { formatDate, generateId } from '@/utils/helpers';
@@ -63,6 +64,11 @@ function rowToReport(row: Record<string, unknown>): Report {
     uploaded_at: (row.uploaded_at as string) ?? null,
     upload_error: (row.upload_error as string) ?? '',
     visit_group: (row.visit_group as string) ?? null,
+    visit_id: (row.visit_id as number) ?? null,
+    contract_id: (row.contract_id as number) ?? null,
+    contract_number: (row.contract_number as string) ?? '',
+    contract_title: (row.contract_title as string) ?? '',
+    contract_batch_id: (row.contract_batch_id as string) ?? null,
   };
 }
 
@@ -99,7 +105,8 @@ export interface CreateReportOptions {
   capacity?: string;
   location?: string;
   installationYear?: string;
-  visitGroup?: string;
+  /** The website visit this report is made for, with its contract when it has one. */
+  visit?: Pick<Visit, 'id' | 'contract_id' | 'contract_number' | 'contract_title'>;
 }
 
 function insertChecklistItem(
@@ -252,9 +259,13 @@ export async function createReport(
 
   db.runSync(
     `INSERT INTO reports (id, type, machine_id, date, maintenance_type, status,
-     temp_unit, pressure_unit, created_at, updated_at, visit_group)
-     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
-    [id, type, machineId, date, maintenanceType, tempUnit, pressureUnit, now, now, options.visitGroup ?? null],
+     temp_unit, pressure_unit, created_at, updated_at, visit_id, contract_id, contract_number, contract_title)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id, type, machineId, date, maintenanceType, tempUnit, pressureUnit, now, now,
+      options.visit?.id ?? null, options.visit?.contract_id ?? null,
+      options.visit?.contract_number ?? '', options.visit?.contract_title ?? '',
+    ],
   );
 
   const machineTemplate = machineId ? getMachineTemplate(machineId) : null;
@@ -868,81 +879,83 @@ export function updateReportUnits(
   updateReport(reportId, { temp_unit: tempUnit, pressure_unit: pressureUnit });
 }
 
-/** One report of a contract visit, with what the visit page shows about it. */
+/** A report as the visit pages show it: its unit, and whether it is ready to be signed. */
 export interface VisitReport extends Report {
   unit_name: string;
-  /** How many checklist rows have a value: 0 means nobody has filled this report yet. */
-  filled: number;
-  tech_signed: number;
-  client_signed: number;
+  unit_web_id: number | null;
+  /** Checklist rows with no value. Ready to sign = none left (a row that does not apply can be deleted). */
+  empty_rows: number;
+  rows: number;
 }
 
-export function visitGroupOf(date: string, client: string): string {
-  return `${date}|${client}`;
+const VISIT_REPORT_SELECT = `SELECT r.*, COALESCE(NULLIF(m.name, ''), NULLIF(r.machine_model, ''), r.serial_no) AS unit_name,
+    m.web_id AS unit_web_id,
+    (SELECT COUNT(*) FROM checklist_items c WHERE c.report_id = r.id AND TRIM(c.value) = '') AS empty_rows,
+    (SELECT COUNT(*) FROM checklist_items c WHERE c.report_id = r.id) AS row_count
+  FROM reports r LEFT JOIN machines m ON m.id = r.machine_id`;
+
+function rowToVisitReport(row: Record<string, unknown>): VisitReport {
+  return {
+    ...rowToReport(row),
+    unit_name: (row.unit_name as string) ?? '',
+    unit_web_id: (row.unit_web_id as number) ?? null,
+    empty_rows: row.empty_rows as number,
+    rows: row.row_count as number,
+  };
 }
 
-export function getVisitReports(group: string): VisitReport[] {
-  const signed = (type: string) =>
-    `(SELECT COUNT(*) FROM signatures s WHERE s.report_id = r.id AND s.type = '${type}' AND s.image_base64 != '')`;
+export function isReadyToSign(report: VisitReport): boolean {
+  return report.status === 'open' && report.rows > 0 && report.empty_rows === 0;
+}
+
+/** The newest report made for this website visit, if the technician has started one. */
+export function getReportForVisit(visitId: number): VisitReport | null {
+  const row = getDatabase().getFirstSync<Record<string, unknown>>(
+    `${VISIT_REPORT_SELECT} WHERE r.visit_id = ? ORDER BY r.created_at DESC LIMIT 1`,
+    [visitId],
+  );
+  return row ? rowToVisitReport(row) : null;
+}
+
+/** Every report made for this contract on the phone, newest first. */
+export function getContractReports(contractId: number): VisitReport[] {
   return getDatabase()
     .getAllSync<Record<string, unknown>>(
-      `SELECT r.*, COALESCE(NULLIF(m.name, ''), NULLIF(r.machine_model, ''), r.serial_no) AS unit_name,
-         (SELECT COUNT(*) FROM checklist_items c WHERE c.report_id = r.id AND c.value != '') AS filled,
-         ${signed('technician')} AS tech_signed, ${signed('client')} AS client_signed
-       FROM reports r LEFT JOIN machines m ON m.id = r.machine_id
-       WHERE r.visit_group = ? ORDER BY unit_name COLLATE NOCASE, r.id`,
-      [group],
+      `${VISIT_REPORT_SELECT} WHERE r.contract_id = ? ORDER BY r.created_at DESC`,
+      [contractId],
     )
-    .map((row) => ({
-      ...rowToReport(row),
-      unit_name: (row.unit_name as string) ?? '',
-      filled: row.filled as number,
-      tech_signed: row.tech_signed as number,
-      client_signed: row.client_signed as number,
-    }));
+    .map(rowToVisitReport);
 }
 
-/** A report for every unit of the visit that has none yet. Safe to run again: nothing is made twice. */
-export async function startVisit(
-  group: string,
-  machines: { id: string; type: MachineType }[],
-  units: { tempUnit: TempUnit; pressureUnit: PressureUnit },
-): Promise<void> {
-  const have = new Set(getVisitReports(group).map((r) => r.machine_id));
-  for (const machine of machines) {
-    if (!have.has(machine.id)) {
-      await createReport(machine.type, { machineId: machine.id, visitGroup: group, ...units });
-    }
-  }
+export interface SignatureInput {
+  image: string;
+  name: string;
 }
 
-/** One signature for every open report of the visit. The technician's name also fills reports that have none. */
-export function saveVisitSignature(
-  group: string,
-  type: 'technician' | 'client',
-  imageBase64: string,
-  signerName: string,
+/**
+ * The contract's "sign all": the two signatures go into every chosen report, which all get one batch id and are locked.
+ * All of them or none: one transaction. Returns the batch id.
+ */
+export function signContractReports(
+  reportIds: string[],
+  technician: SignatureInput,
+  client: SignatureInput,
   signedAt: string,
-): void {
+): string {
   const db = getDatabase();
+  const batch = `batch-${generateId()}`;
   db.withTransactionSync(() => {
-    getVisitReports(group)
-      .filter((r) => r.status === 'open')
-      .forEach((r) => saveSignature(r.id, type, imageBase64, signerName, signedAt));
-    if (type === 'technician' && signerName.trim()) {
+    reportIds.forEach((id) => {
+      const report = getReportById(id);
+      if (!report || report.status !== 'open') return;
+      saveSignature(id, 'technician', technician.image, technician.name, signedAt);
+      saveSignature(id, 'client', client.image, client.name, signedAt);
       db.runSync(
-        "UPDATE reports SET technician = ? WHERE visit_group = ? AND status = 'open' AND technician = ''",
-        [signerName.trim(), group],
+        "UPDATE reports SET contract_batch_id = ?, technician = CASE WHEN technician = '' THEN ? ELSE technician END WHERE id = ?",
+        [batch, technician.name.trim(), id],
       );
-    }
+      lockReport(id);
+    });
   });
-}
-
-/** Locks every open report of the visit in one step: all of them or none. */
-export function lockVisit(group: string): void {
-  getDatabase().withTransactionSync(() => {
-    getVisitReports(group)
-      .filter((r) => r.status === 'open')
-      .forEach((r) => lockReport(r.id));
-  });
+  return batch;
 }

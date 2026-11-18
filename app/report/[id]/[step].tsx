@@ -19,7 +19,7 @@ import {
   addPhoto,
   deletePhoto,
   getFullReport,
-  getVisitReports,
+  getContractReports,
   lockReport,
   removeMaterialRow,
   saveSignature,
@@ -166,13 +166,17 @@ export default function ReportStepScreen() {
     return new Date();
   }, [report?.date]);
 
-  // A report of a contract visit: its neighbours, to step from one unit's report to the next.
+  // A report of a contract: the contract's other reports, to step from one unit's report to the next.
   const visit = useMemo(
-    () => (report?.visit_group ? getVisitReports(report.visit_group) : []),
-    [report?.visit_group],
+    () =>
+      report?.contract_id != null
+        ? getContractReports(report.contract_id).sort((a, b) => a.unit_name.localeCompare(b.unit_name))
+        : [],
+    [report?.contract_id],
   );
   const visitAt = visit.findIndex((r) => r.id === id);
-  const openVisit = () => router.dismissTo({ pathname: '/visit', params: { group: report?.visit_group ?? '' } } as never);
+  const openVisit = () =>
+    router.dismissTo({ pathname: '/visit', params: { contract: String(report?.contract_id ?? '') } } as never);
 
   useEffect(() => {
     if (report?.machine_id) {
@@ -477,12 +481,12 @@ export default function ReportStepScreen() {
         return (
           <>
             {locked && <LockedBadge />}
-            {!locked && report.visit_group ? (
+            {!locked && report.contract_id != null ? (
               <View style={styles.visitNote}>
                 <Text style={styles.visitNoteText}>
-                  هذا التقرير جزء من زيارة عقد ({visit.length} تقارير). يمكن توقيع كل التقارير مرة واحدة وقفلها وإرسالها معاً من صفحة الزيارة.
+                  هذا التقرير جزء من العقد {report.contract_number}. يوقّع الفني والعميل مرة واحدة لكل التقارير الجاهزة من صفحة العقد.
                 </Text>
-                <Button title="التوقيع والقفل لكل تقارير الزيارة" onPress={openVisit} variant="accent" />
+                <Button title="توقيع الكل من صفحة العقد" onPress={openVisit} variant="accent" />
                 <Text style={styles.visitNoteText}>أو وقّع هذا التقرير وحده:</Text>
               </View>
             ) : null}
@@ -562,7 +566,7 @@ export default function ReportStepScreen() {
             <Text style={styles.visitNameText} numberOfLines={1}>
               {visit[visitAt].unit_name} ({visitAt + 1}/{visit.length})
             </Text>
-            <Text style={styles.visitHint}>كل تقارير الزيارة</Text>
+            <Text style={styles.visitHint}>كل تقارير العقد</Text>
           </Pressable>
           <Pressable
             style={styles.visitStep}
