@@ -286,7 +286,6 @@ function migrateV8(db: SQLite.SQLiteDatabase): void {
     );
   `);
   if (!columnExists(db, 'reports', 'form_rows')) db.execSync('ALTER TABLE reports ADD COLUMN form_rows TEXT');
-  if (!columnExists(db, 'reports', 'form_source')) db.execSync('ALTER TABLE reports ADD COLUMN form_source TEXT');
 }
 
 export function runMigrations(db: SQLite.SQLiteDatabase): void {

@@ -177,12 +177,8 @@ function setupValues(setup: FormSetup | null, values: Record<string, string>): R
   return next;
 }
 
-function setReportForm(reportId: string, rows: FormRow[] | null, source: string | null): void {
-  getDatabase().runSync('UPDATE reports SET form_rows = ?, form_source = ? WHERE id = ?', [
-    rows ? JSON.stringify(rows) : null,
-    source,
-    reportId,
-  ]);
+function setReportForm(reportId: string, rows: FormRow[] | null): void {
+  getDatabase().runSync('UPDATE reports SET form_rows = ? WHERE id = ?', [rows ? JSON.stringify(rows) : null, reportId]);
 }
 
 function valuesByKey(items: ChecklistItem[]): Record<string, string> {
@@ -276,6 +272,7 @@ function seedFromWebForm(
   previous: FullReport | null,
   template: MachineTemplate | null,
 ): void {
+  // the counts and phase the setup leaves out are as today: from the last report, else the phone's template
   const db = getDatabase();
   const values: Record<string, string> = previous
     ? valuesByKey(previous.checklist_items)
@@ -283,16 +280,9 @@ function seedFromWebForm(
       ? { compressor_count: String(template.compressor_count), circuit_count: String(template.circuit_count) }
       : {};
   seedDefaultChecklist(reportId, type, unitConfigFromValues(type, setupValues(web.setup, values)), web.rows);
-  setReportForm(reportId, web.rows, web.source);
-
-  const materials =
-    web.materials ??
-    (previous
-      ? previous.materials.filter((m) => m.description.trim()).map((m) => ({ description: m.description, unit: m.unit ?? '' }))
-      : template
-        ? parseTemplateJson<DefaultMaterialTemplate[]>(template.default_materials, [])
-        : []);
-  seedMaterialsFromTemplate(reportId, materials.filter((m) => m?.description));
+  setReportForm(reportId, web.rows);
+  // no parts list on the website: the built-in form, which starts with none
+  seedMaterialsFromTemplate(reportId, (web.materials ?? []).filter((m) => m?.description));
   seedAttentionRows(reportId);
 
   const temp = web.setup?.temp_unit ?? previous?.temp_unit;
@@ -320,10 +310,10 @@ export async function createReport(
   let machineId = options.machineId ?? null;
 
   let previousReport: FullReport | null = null;
-  let previousForm: { id: string; form_rows: string | null; form_source: string | null } | null = null;
+  let previousForm: { id: string; form_rows: string | null } | null = null;
   if (machineId) {
-    previousForm = db.getFirstSync<{ id: string; form_rows: string | null; form_source: string | null }>(
-      'SELECT id, form_rows, form_source FROM reports WHERE machine_id = ? ORDER BY created_at DESC LIMIT 1',
+    previousForm = db.getFirstSync<{ id: string; form_rows: string | null }>(
+      'SELECT id, form_rows FROM reports WHERE machine_id = ? ORDER BY created_at DESC LIMIT 1',
       [machineId],
     );
     if (previousForm) previousReport = getFullReport(previousForm.id);
@@ -343,11 +333,10 @@ export async function createReport(
   const machineTemplate = machineId ? getMachineTemplate(machineId) : null;
   const machine = machineId ? getMachineById(machineId) : null;
   const web = machine && type !== 'custom' ? webFormFor(machine.web_id, type) : null;
-  // The website's form wins when it changed after the unit's last report was started (with no report: after the
-  // phone's own template was saved), or when another website form applies now ("Back to default" on a unit's form).
-  const webWins = !!web && (previousReport
-    ? web.source !== previousForm?.form_source || isNewer(web.changedAt, previousReport.created_at)
-    : !machineTemplate || isNewer(web.changedAt, machineTemplate.updated_at));
+  // The website's form wins when it changed after the phone's own template was saved and after the unit's last
+  // report was started. "Back to default" counts as a change: the website sends a newer changed_at with rows null.
+  const webWins =
+    !!web && isNewer(web.changedAt, machineTemplate?.updated_at) && isNewer(web.changedAt, previousReport?.created_at);
 
   if (web && webWins) {
     seedFromWebForm(id, type, web, previousReport, machineTemplate);
@@ -357,10 +346,10 @@ export async function createReport(
       ]);
     }
   } else if (previousReport) {
-    // the previous report's layout, while the website still has the form it came from
+    // the website's form has not changed since: the previous report's layout. No website form at all: as before forms.
     const keepForm = web ? parseFormRows(previousForm?.form_rows) : null;
     carryOverFromReport(id, type, previousReport, keepForm);
-    if (keepForm) setReportForm(id, keepForm, previousForm?.form_source ?? null);
+    if (keepForm) setReportForm(id, keepForm);
     db.runSync(
       'UPDATE reports SET client = ?, site = ?, machine_model = ?, serial_no = ?, temp_unit = ?, pressure_unit = ? WHERE id = ?',
       [

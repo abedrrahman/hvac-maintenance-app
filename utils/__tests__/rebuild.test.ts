@@ -206,7 +206,8 @@ describe('report forms from the website', () => {
     replaceReportForms({ types: { rtu: typeForm } });
     const open = await createReport('rtu', { machineId: unit });
     const before = items(open.id).map((i) => [i.field_key, i.label_en, i.sort_order]);
-    replaceReportForms({}); // "Back to default" on the website, then a sync
+    // "Back to default" on the website, then a sync: the entry stays, emptied, with a newer time
+    replaceReportForms({ types: { rtu: { rows: null, materials: null, changed_at: '2099-03-01T00:00:00Z' } } });
     upgradeOpenReports(); // the app restarts
     expect(items(open.id).map((i) => [i.field_key, i.label_en, i.sort_order])).toEqual(before);
     // a second compressor in the open report: its rows follow the report's own form
@@ -219,6 +220,50 @@ describe('report forms from the website', () => {
     expect(item(next.id, 'phase_rotation').label_en).toBe('Phase Rotation');
     expect(keys(next.id)).not.toContain('custom_ab12cd34');
     expect(keys(next.id)).toContain('voltage_l1l2');
+  });
+
+  it("a unit's Back to default gives its type's form; a type's gives the built-in form over the phone's older one", async () => {
+    const { saveMachineTemplate } = require('../../db/repositories/machines');
+    const unit = webUnit(506);
+    // the phone's own form for this unit, saved when an earlier report was finished
+    saveMachineTemplate(unit, {
+      compressor_count: 1, circuit_count: 1, voltage_types: [], refrigerant_type: 'R22',
+      custom_checklist_rows: [{ label_en: 'Old box', label_ar: 'قديم' }], default_materials: [{ description: 'Old part', unit: '' }],
+      temp_unit: 'C', pressure_unit: 'bar',
+    });
+    const cleared = { report_type: 'rtu', rows: null, materials: null, setup: null };
+    replaceReportForms({ types: { rtu: typeForm }, units: { '506': { ...cleared, changed_at: '2099-04-01T00:00:00Z' } } });
+    const fromType = await createReport('rtu', { machineId: unit });
+    expect(item(fromType.id, 'phase_rotation').label_en).toBe('Rotation');
+    expect(getFullReport(fromType.id)!.materials.map((m) => m.description)).toEqual(['Filter']);
+
+    replaceReportForms({
+      types: { rtu: { rows: null, materials: null, changed_at: '2099-05-01T00:00:00Z' } },
+      units: { '506': { ...cleared, changed_at: '2099-04-01T00:00:00Z' } },
+    });
+    const builtIn = await createReport('rtu', { machineId: unit });
+    expect(item(builtIn.id, 'phase_rotation').label_en).toBe('Phase Rotation');
+    expect(items(builtIn.id).map((i) => i.label_en)).not.toContain('Old box');
+    expect(items(builtIn.id).map((i) => i.label_en)).not.toContain('Belt');
+  });
+
+  it("the phone's own template wins when it is newer than the website's form, and when the website has none", async () => {
+    const { saveMachineTemplate } = require('../../db/repositories/machines');
+    const template = {
+      compressor_count: 2, circuit_count: 1, voltage_types: [], refrigerant_type: 'R22',
+      custom_checklist_rows: [{ label_en: 'Old box', label_ar: 'قديم' }], default_materials: [{ description: 'Old part', unit: '' }],
+      temp_unit: 'C', pressure_unit: 'bar',
+    };
+    for (const forms of [{ types: { rtu: { ...typeForm, changed_at: '2020-01-01T00:00:00Z' } } }, {}]) {
+      const unit = webUnit(forms.types ? 507 : 508);
+      saveMachineTemplate(unit, template);
+      replaceReportForms(forms);
+      const report = await createReport('rtu', { machineId: unit });
+      expect(items(report.id).map((i) => i.label_en)).toContain('Old box');
+      expect(item(report.id, 'phase_rotation').label_en).toBe('Phase Rotation');
+      expect(values(report.id).compressor_count).toBe('2');
+      expect(getFullReport(report.id)!.materials.map((m) => m.description)).toEqual(['Old part']);
+    }
   });
 
   it('the next report keeps the form while the website has not changed it', async () => {

@@ -13,8 +13,6 @@ export interface WebForm {
 
 /** The form a new report of a unit starts from: rows and materials from the unit's form, else its type's form. */
 export interface ResolvedForm {
-  /** 'unit:<id>' or 'type:<type>': the form the rows come from. */
-  source: string;
   rows: FormRow[] | null;
   materials: DefaultMaterialTemplate[] | null;
   setup: FormSetup | null;
@@ -65,10 +63,10 @@ export function webFormFor(webId: number | null | undefined, type: MachineType):
 
   const unitRows = parseFormRows(unit?.rows);
   const unitMaterials = parse<DefaultMaterialTemplate[]>(unit?.materials ?? null);
+  // null at the unit means "use the type's form"; null at the type means "the app's built-in form"
   const useType = typeForm && (!unitRows || !unitMaterials);
   const times = [unit?.changed_at, useType ? typeForm.changed_at : null];
   return {
-    source: unitRows || !useType ? `unit:${webId}` : `type:${type}`,
     rows: unitRows ?? (typeForm ? parseFormRows(typeForm.rows) : null),
     materials: unitMaterials ?? (typeForm ? parse<DefaultMaterialTemplate[]>(typeForm.materials) : null),
     setup: parse<FormSetup>(unit?.setup ?? null),
