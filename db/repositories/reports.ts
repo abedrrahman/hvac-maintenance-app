@@ -26,6 +26,7 @@ import {
   CustomChecklistTemplate,
   DefaultMaterialTemplate,
   FullReport,
+  MachineTemplate,
   MachineType,
   MaintenanceType,
   Material,
@@ -39,6 +40,8 @@ import {
   VoltageTypeConfig,
 } from '@/types';
 import { deletePicture } from '@/services/photos';
+import { ResolvedForm, webFormFor } from '@/db/repositories/reportForms';
+import { FormRow, FormSetup, applyForm, isNewer, parseFormRows, toPattern } from '@/utils/reportForm';
 import { formatDate, generateId } from '@/utils/helpers';
 import { DEFAULT_UNITS, convertChecklistValueOnUnitChange } from '@/utils/units';
 
@@ -136,6 +139,7 @@ function seedDefaultChecklist(
   reportId: string,
   type: MachineType,
   config: UnitConfig = defaultUnitConfig(type),
+  formRows: FormRow[] | null = null,
 ): void {
   if (type === 'custom') {
     seedChecklistFromCustomTemplates(reportId);
@@ -143,17 +147,42 @@ function seedDefaultChecklist(
   }
 
   const values = hasUnitConfig(type) ? unitConfigValues(config) : {};
-  buildChecklist(type, config).forEach((field, index) => {
+  applyForm(buildChecklist(type, config), formRows).forEach((field, index) => {
     insertChecklistItem(
       reportId,
       field.labelEn,
       field.labelAr,
       field.key,
-      0,
+      field.custom ? 1 : 0,
       index,
       values[field.key] ?? '',
     );
   });
+}
+
+/** The phase and counts a website setup gives; what it leaves out stays as `values` says. */
+function setupValues(setup: FormSetup | null, values: Record<string, string>): Record<string, string> {
+  if (!setup) return values;
+  const next = { ...values };
+  const set = (key: string, value: unknown) => {
+    if (value != null && value !== '') next[key] = String(value);
+  };
+  const phase = String(setup.phase ?? '');
+  set('unit_phase', /3|three/i.test(phase) ? '3Ph' : /1|single/i.test(phase) ? '1Ph' : '');
+  set('compressor_count', setup.compressors);
+  set('circuit_count', setup.circuits);
+  set('supply_fan_count', setup.supply_fans);
+  set('extract_fan_count', setup.extract_fans);
+  set('return_fan_count', setup.return_fans);
+  return next;
+}
+
+function setReportForm(reportId: string, rows: FormRow[] | null, source: string | null): void {
+  getDatabase().runSync('UPDATE reports SET form_rows = ?, form_source = ? WHERE id = ?', [
+    rows ? JSON.stringify(rows) : null,
+    source,
+    reportId,
+  ]);
 }
 
 function valuesByKey(items: ChecklistItem[]): Record<string, string> {
@@ -198,15 +227,17 @@ function carryOverFromReport(
   newReportId: string,
   type: MachineType,
   source: FullReport,
+  formRows: FormRow[] | null = null,
 ): void {
   const db = getDatabase();
 
   if (type !== 'custom' || source.type !== type) {
-    // Rows come from today's template, built for the compressors, circuits and fans the last report recorded.
+    // Rows come from today's template (laid out as the previous report's website form, while it applies),
+    // built for the compressors, circuits and fans the last report recorded.
     // Only the rows the technician added by hand are copied. A row removed from the last report is back.
-    seedDefaultChecklist(newReportId, type, unitConfigFromValues(type, valuesByKey(source.checklist_items)));
+    seedDefaultChecklist(newReportId, type, unitConfigFromValues(type, valuesByKey(source.checklist_items)), formRows);
     source.checklist_items
-      .filter((item) => item.is_custom)
+      .filter((item) => item.is_custom && !item.field_key)
       .forEach((item, i) => insertChecklistItem(newReportId, item.label_en, item.label_ar, null, 1, 1000 + i));
   } else {
     source.checklist_items.forEach((item, index) => {
@@ -237,6 +268,41 @@ function carryOverFromReport(
   }
 }
 
+/** A new report laid out by the website's form: its rows, starting parts and setup. What the form leaves out is as today. */
+function seedFromWebForm(
+  reportId: string,
+  type: MachineType,
+  web: ResolvedForm,
+  previous: FullReport | null,
+  template: MachineTemplate | null,
+): void {
+  const db = getDatabase();
+  const values: Record<string, string> = previous
+    ? valuesByKey(previous.checklist_items)
+    : template
+      ? { compressor_count: String(template.compressor_count), circuit_count: String(template.circuit_count) }
+      : {};
+  seedDefaultChecklist(reportId, type, unitConfigFromValues(type, setupValues(web.setup, values)), web.rows);
+  setReportForm(reportId, web.rows, web.source);
+
+  const materials =
+    web.materials ??
+    (previous
+      ? previous.materials.filter((m) => m.description.trim()).map((m) => ({ description: m.description, unit: m.unit ?? '' }))
+      : template
+        ? parseTemplateJson<DefaultMaterialTemplate[]>(template.default_materials, [])
+        : []);
+  seedMaterialsFromTemplate(reportId, materials.filter((m) => m?.description));
+  seedAttentionRows(reportId);
+
+  const temp = web.setup?.temp_unit ?? previous?.temp_unit;
+  const pressure = web.setup?.pressure_unit ?? previous?.pressure_unit;
+  if (temp && ['C', 'F', 'K'].includes(temp)) db.runSync('UPDATE reports SET temp_unit = ? WHERE id = ?', [temp, reportId]);
+  if (pressure && ['bar', 'psi', 'kPa', 'MPa'].includes(pressure)) {
+    db.runSync('UPDATE reports SET pressure_unit = ? WHERE id = ?', [pressure, reportId]);
+  }
+}
+
 export async function createReport(
   type: MachineType,
   options: CreateReportOptions = {},
@@ -254,12 +320,13 @@ export async function createReport(
   let machineId = options.machineId ?? null;
 
   let previousReport: FullReport | null = null;
+  let previousForm: { id: string; form_rows: string | null; form_source: string | null } | null = null;
   if (machineId) {
-    const prevRow = db.getFirstSync<{ id: string }>(
-      'SELECT id FROM reports WHERE machine_id = ? ORDER BY created_at DESC LIMIT 1',
+    previousForm = db.getFirstSync<{ id: string; form_rows: string | null; form_source: string | null }>(
+      'SELECT id, form_rows, form_source FROM reports WHERE machine_id = ? ORDER BY created_at DESC LIMIT 1',
       [machineId],
     );
-    if (prevRow) previousReport = getFullReport(prevRow.id);
+    if (previousForm) previousReport = getFullReport(previousForm.id);
   }
 
   db.runSync(
@@ -274,9 +341,26 @@ export async function createReport(
   );
 
   const machineTemplate = machineId ? getMachineTemplate(machineId) : null;
+  const machine = machineId ? getMachineById(machineId) : null;
+  const web = machine && type !== 'custom' ? webFormFor(machine.web_id, type) : null;
+  // The website's form wins when it changed after the unit's last report was started (with no report: after the
+  // phone's own template was saved), or when another website form applies now ("Back to default" on a unit's form).
+  const webWins = !!web && (previousReport
+    ? web.source !== previousForm?.form_source || isNewer(web.changedAt, previousReport.created_at)
+    : !machineTemplate || isNewer(web.changedAt, machineTemplate.updated_at));
 
-  if (previousReport) {
-    carryOverFromReport(id, type, previousReport);
+  if (web && webWins) {
+    seedFromWebForm(id, type, web, previousReport, machineTemplate);
+    if (previousReport) {
+      db.runSync('UPDATE reports SET client = ?, site = ?, machine_model = ?, serial_no = ? WHERE id = ?', [
+        previousReport.client, previousReport.site, previousReport.machine_model, previousReport.serial_no, id,
+      ]);
+    }
+  } else if (previousReport) {
+    // the previous report's layout, while the website still has the form it came from
+    const keepForm = web ? parseFormRows(previousForm?.form_rows) : null;
+    carryOverFromReport(id, type, previousReport, keepForm);
+    if (keepForm) setReportForm(id, keepForm, previousForm?.form_source ?? null);
     db.runSync(
       'UPDATE reports SET client = ?, site = ?, machine_model = ?, serial_no = ?, temp_unit = ?, pressure_unit = ? WHERE id = ?',
       [
@@ -319,7 +403,8 @@ export async function createReport(
 
   // the unit's refrigerant does not change between visits
   const last = previousReport ? valuesByKey(previousReport.checklist_items) : {};
-  const refrigerant = last.refrigerant || last.refrigerant_type || machineTemplate?.refrigerant_type;
+  const refrigerant =
+    (webWins && web?.setup?.refrigerant) || last.refrigerant || last.refrigerant_type || machineTemplate?.refrigerant_type;
   if (refrigerant) {
     db.runSync(
       "UPDATE checklist_items SET value = ? WHERE report_id = ? AND field_key IN ('refrigerant', 'refrigerant_type')",
@@ -328,7 +413,6 @@ export async function createReport(
   }
 
   if (machineId) {
-    const machine = getMachineById(machineId);
     if (machine && !previousReport) {
       db.runSync(
         'UPDATE reports SET client = ?, site = ?, machine_model = ?, serial_no = ? WHERE id = ?',
@@ -428,6 +512,55 @@ export function saveMachineTemplateFromReport(report: FullReport): void {
   });
 }
 
+/**
+ * The form this report ended with, for the website (POST /api/reports/ `form`): every box in its order, numbered boxes
+ * once with #, and the standard boxes left out of it (removed by the technician or hidden by its form) as hidden.
+ */
+export function reportForm(report: FullReport): { rows: FormRow[]; materials: DefaultMaterialTemplate[]; setup: FormSetup } {
+  const own = getDatabase().getFirstSync<{ form_rows: string | null }>('SELECT form_rows FROM reports WHERE id = ?', [report.id]);
+  const rows: FormRow[] = [];
+  const add = (row: FormRow) => {
+    if (!rows.some((r) => r.key === row.key)) rows.push(row);
+  };
+  report.checklist_items.forEach((item) => {
+    if (item.is_custom) {
+      // a box the technician added gets a key from its id, the same at every try
+      const key = item.field_key || `custom_${item.id.replace(/\W/g, '').slice(-8)}`;
+      add({ key, label_en: item.label_en, label_ar: item.label_ar, hidden: false, custom: true });
+    } else if (item.field_key) {
+      add({ ...toPattern(item.field_key, item.label_en, item.label_ar), hidden: false, custom: false });
+    }
+  });
+  const values = valuesByKey(report.checklist_items);
+  const config = unitConfigFromValues(report.type, values);
+  const builtIn = buildChecklist(report.type, config);
+  removedRows(report.id).forEach((key) => {
+    const field = builtIn.find((f) => f.key === key);
+    add({ ...toPattern(key, field?.labelEn ?? key, field?.labelAr ?? key), hidden: true, custom: false });
+  });
+  (parseFormRows(own?.form_rows) ?? []).filter((r) => r.hidden).forEach((r) => add({ ...r, hidden: true }));
+
+  return {
+    rows,
+    materials: report.materials
+      .filter((m) => m.description.trim())
+      .map((m) => ({ description: m.description, unit: m.unit ?? '' })),
+    setup: {
+      ...(hasUnitConfig(report.type) && {
+        phase: config.phase,
+        compressors: config.compressors,
+        circuits: config.circuits,
+        supply_fans: config.fans.supply,
+        extract_fans: config.fans.extract,
+        return_fans: config.fans.return,
+      }),
+      refrigerant: values.refrigerant || values.refrigerant_type || '',
+      temp_unit: report.temp_unit,
+      pressure_unit: report.pressure_unit,
+    },
+  };
+}
+
 /** Template rows the technician removed from this report (held on a row): they must not come back when the rows are rebuilt. */
 function removedRows(reportId: string): Set<string> {
   const row = getDatabase().getFirstSync<{ removed_rows: string | null }>(
@@ -466,7 +599,10 @@ export function syncUnitRows(reportId: string): void {
     [reportId],
   );
   const config = unitConfigFromValues(report.type, valuesByKey(items));
-  const desired = buildChecklist(report.type, config);
+  // the form this report was built from, never a newer one from the website
+  const own = db.getFirstSync<{ form_rows: string | null }>('SELECT form_rows FROM reports WHERE id = ?', [reportId]);
+  const desired = applyForm(buildChecklist(report.type, config), parseFormRows(own?.form_rows));
+  const websiteBoxes = new Set(desired.filter((f) => f.custom).map((f) => f.key));
   const place = new Map(desired.map((field, index) => [field.key, index]));
   const templateKeys = unitRowKeys(report.type);
   const kept = new Set<string>();
@@ -474,7 +610,7 @@ export function syncUnitRows(reportId: string): void {
 
   items.forEach((item) => {
     const key = item.field_key ?? '';
-    const at = item.is_custom ? undefined : place.get(key);
+    const at = item.is_custom && !websiteBoxes.has(key) ? undefined : place.get(key);
     if (at !== undefined && !kept.has(key)) {
       kept.add(key);
       if (item.sort_order !== at) db.runSync('UPDATE checklist_items SET sort_order = ? WHERE id = ?', [at, item.id]);
@@ -499,7 +635,8 @@ export function syncUnitRows(reportId: string): void {
   const values = unitConfigValues(config);
   const removed = removedRows(reportId);
   desired.forEach((field, index) => {
-    if (!kept.has(field.key) && !removed.has(field.key)) {
+    // a website box the technician deleted stays deleted
+    if (!field.custom && !kept.has(field.key) && !removed.has(field.key)) {
       insertChecklistItem(reportId, field.labelEn, field.labelAr, field.key, 0, index, values[field.key] ?? '');
     }
   });

@@ -132,3 +132,123 @@ describe('alarm list built into the app', () => {
     expect(countAlarms()).toBe(1);
   });
 });
+
+describe('report forms from the website', () => {
+  const { upsertWebMachine } = require('../../db/repositories/machines');
+  const { replaceReportForms } = require('../../db/repositories/reportForms');
+  const { deleteChecklistItem, reportForm } = require('../../db/repositories/reports');
+  type Row = { key: string; label_en: string; hidden: boolean; custom: boolean };
+
+  const webUnit = (webId: number) => {
+    upsertWebMachine({
+      web_id: webId, type: 'rtu', name: `Unit ${webId}`, brand: '', model: 'M', serial_number: `S${webId}`,
+      client_name: 'Client', country: '', site: 'Site', location: '', project: '', web_documents: '[]',
+      web_visit_id: null, web_visit_date: null,
+    });
+    return getDatabase().getFirstSync<{ id: string }>('SELECT id FROM machines WHERE web_id = ?', [webId])!.id;
+  };
+  const items = (id: string) => getFullReport(id)!.checklist_items;
+  const item = (id: string, key: string) => items(id).find((i) => i.field_key === key)!;
+  const keys = (id: string) => items(id).map((i) => i.field_key);
+  const typeForm = {
+    rows: [
+      { key: 'phase_rotation', label_en: 'Rotation', label_ar: 'الدوران' },
+      { key: 'voltage_l1l2', label_en: 'Voltage L1-L2', label_ar: 'الفولتيه', hidden: true },
+      { key: 'custom_ab12cd34', label_en: 'Belt', label_ar: 'السير', custom: true },
+      { key: 'compressor_#_amps_l1', label_en: 'Comp # L1', label_ar: 'ضاغط # L1' },
+    ],
+    materials: [{ description: 'Filter', unit: 'pcs' }],
+    changed_at: '2099-01-01T10:00:00+03:00',
+  };
+
+  it('builds a new report from the type form: names, order, hidden and added boxes, parts', async () => {
+    const unit = webUnit(501);
+    replaceReportForms({ types: { rtu: typeForm } });
+    const report = await createReport('rtu', { machineId: unit });
+    const k = keys(report.id);
+    expect(k.indexOf('phase_rotation')).toBeLessThan(k.indexOf('custom_ab12cd34'));
+    expect(k.indexOf('custom_ab12cd34')).toBeLessThan(k.indexOf('compressor_1_amps_l1'));
+    expect(k).not.toContain('voltage_l1l2');
+    expect(k).toContain('refrigerant'); // not in the form: stays where the built-in form puts it
+    expect(item(report.id, 'phase_rotation').label_en).toBe('Rotation');
+    expect(item(report.id, 'compressor_1_amps_l1').label_ar).toBe('ضاغط 1 L1');
+    expect(item(report.id, 'custom_ab12cd34').is_custom).toBe(1);
+    expect(getFullReport(report.id)!.materials.map((m) => m.description)).toEqual(['Filter']);
+  });
+
+  it('a unit with its own form gets it, with its setup as starting values', async () => {
+    const unit = webUnit(502);
+    replaceReportForms({
+      types: { rtu: typeForm },
+      units: {
+        '502': {
+          report_type: 'rtu', rows: null, materials: [{ description: 'Belt', unit: 'pcs' }],
+          setup: { phase: '1Ph', compressors: 2, refrigerant: 'R32', temp_unit: 'F', pressure_unit: 'psi' },
+          changed_at: '2099-01-02T10:00:00Z',
+        },
+      },
+    });
+    const report = await createReport('rtu', { machineId: unit });
+    const full = getFullReport(report.id)!;
+    const v = values(report.id);
+    expect(v.compressor_count).toBe('2');
+    expect(v.unit_phase).toContain('1Ph');
+    expect(keys(report.id)).toContain('compressor_2_amps'); // two compressors, single phase
+    expect(keys(report.id)).not.toContain('compressor_3_amps');
+    expect(v.refrigerant).toBe('R32');
+    expect([full.temp_unit, full.pressure_unit]).toEqual(['F', 'psi']);
+    expect(full.materials.map((m) => m.description)).toEqual(['Belt']);
+    expect(item(report.id, 'phase_rotation').label_en).toBe('Rotation'); // its rows come from the type's form
+  });
+
+  it('an open report keeps its boxes after a changed form arrives; Back to default reaches new reports', async () => {
+    const unit = webUnit(503);
+    replaceReportForms({ types: { rtu: typeForm } });
+    const open = await createReport('rtu', { machineId: unit });
+    const before = items(open.id).map((i) => [i.field_key, i.label_en, i.sort_order]);
+    replaceReportForms({}); // "Back to default" on the website, then a sync
+    upgradeOpenReports(); // the app restarts
+    expect(items(open.id).map((i) => [i.field_key, i.label_en, i.sort_order])).toEqual(before);
+    // a second compressor in the open report: its rows follow the report's own form
+    updateChecklistItem(item(open.id, 'compressor_count').id, '2');
+    expect(item(open.id, 'compressor_2_amps_l1').label_en).toBe('Comp 2 L1');
+    expect(keys(open.id)).toContain('custom_ab12cd34');
+    expect(keys(open.id)).not.toContain('voltage_l1l2');
+
+    const next = await createReport('rtu', { machineId: unit });
+    expect(item(next.id, 'phase_rotation').label_en).toBe('Phase Rotation');
+    expect(keys(next.id)).not.toContain('custom_ab12cd34');
+    expect(keys(next.id)).toContain('voltage_l1l2');
+  });
+
+  it('the next report keeps the form while the website has not changed it', async () => {
+    const unit = webUnit(504);
+    replaceReportForms({ types: { rtu: { ...typeForm, changed_at: '2020-01-01T00:00:00Z' } } });
+    const first = await createReport('rtu', { machineId: unit });
+    expect(keys(first.id)).toContain('custom_ab12cd34');
+    const second = await createReport('rtu', { machineId: unit });
+    expect(keys(second.id)).toEqual(keys(first.id));
+  });
+
+  it('sends the form the report ended with: numbered boxes once with #, removed boxes hidden', async () => {
+    const unit = webUnit(505);
+    replaceReportForms({ types: { rtu: typeForm } });
+    const report = await createReport('rtu', { machineId: unit });
+    updateChecklistItem(item(report.id, 'compressor_count').id, '2');
+    deleteChecklistItem(item(report.id, 'machine_load').id);
+    addCustomChecklistItem(report.id, 'Noise', 'الضجيج');
+    const form = reportForm(getFullReport(report.id)!);
+    const rows: Row[] = form.rows;
+    const amps = rows.filter((r) => r.key.startsWith('compressor_#_amps'));
+    expect(amps.map((r) => r.key)).toEqual(['compressor_#_amps_l1', 'compressor_#_amps_l2', 'compressor_#_amps_l3']);
+    expect(amps[0].label_en).toBe('Comp # L1');
+    expect(amps[1].label_en).toBe('Compressor # Amps L2');
+    expect(rows.find((r) => r.key === 'machine_load')).toMatchObject({ hidden: true });
+    expect(rows.find((r) => r.key === 'voltage_l1l2')).toMatchObject({ hidden: true });
+    expect(rows.find((r) => r.label_en === 'Noise')).toMatchObject({ custom: true, hidden: false });
+    const shown = rows.filter((r) => !r.hidden).map((r) => r.key);
+    expect(shown.indexOf('phase_rotation')).toBeLessThan(shown.indexOf('custom_ab12cd34'));
+    expect(form.setup).toMatchObject({ compressors: 2, phase: '3Ph' });
+    expect(form.materials).toEqual([{ description: 'Filter', unit: 'pcs' }]);
+  });
+});

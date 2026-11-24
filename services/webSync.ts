@@ -13,11 +13,14 @@ import { countAlarms, replaceAlarms } from '@/db/repositories/alarms';
 import { getMachineById, getWebMachineKeys, removeWebMachinesNotIn, upsertWebMachine } from '@/db/repositories/machines';
 import {
   getFullReport,
+  reportForm,
   getReportsToUpload,
   markReportUploadError,
   markReportUploaded,
 } from '@/db/repositories/reports';
+import { WebForm, replaceReportForms } from '@/db/repositories/reportForms';
 import { replaceVisits } from '@/db/repositories/visits';
+import { MACHINE_TYPES } from '@/constants/machineTypes';
 import { MachineType, Signature, WebDocument } from '@/types';
 import { base64ToBytes, formatDate } from '@/utils/helpers';
 import { exportReportPdf } from './pdfGenerator';
@@ -235,7 +238,11 @@ interface SyncPayload {
     project: string;
     location: string;
     document_ids: number[];
+    /** The app's report type for this unit, decided by the website. Older websites leave it out. */
+    report_type?: string;
   }[];
+  /** The report forms the office set on the website. Older websites leave it out. */
+  report_forms?: { types?: Record<string, WebForm>; units?: Record<string, WebForm> };
   documents: { id: number; name_en: string; name_ar: string; type: string; url: string; file_name?: string; size?: number }[];
   visits: {
     id: number;
@@ -296,6 +303,8 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
       };
     }),
   ));
+  // New reports start from these. Open and finished reports keep the form they were built from.
+  if (data.report_forms) getDatabase().withTransactionSync(() => replaceReportForms(data.report_forms!));
   getDatabase().withTransactionSync(() => data.units.forEach((u) => {
     const docs: WebDocument[] = u.document_ids
       .map((id) => documents.get(id))
@@ -305,7 +314,7 @@ export async function downloadSiteData(link: WebLink): Promise<number> {
     const client = clients.get(u.client_id);
     upsertWebMachine({
       web_id: u.id,
-      type: machineTypeFor(u.category),
+      type: MACHINE_TYPES.some((t) => t.id === u.report_type) ? (u.report_type as MachineType) : machineTypeFor(u.category),
       name: u.name_en,
       brand: u.manufacturer,
       model: u.model,
@@ -375,6 +384,9 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
       // the visit the report was made for; reports started from the unit page fall back to the unit's next visit
       visit_id: report.visit_id ?? machine?.web_visit_id ?? '',
       contract_batch_id: report.contract_batch_id ?? '',
+      // when the report was started: the website keeps this form unless its own form changed after that
+      created_at: report.created_at,
+      form: reportForm(full),
     }),
   );
   const pdfUri = await exportReportPdf(full);

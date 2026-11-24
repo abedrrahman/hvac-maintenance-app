@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const CURRENT_VERSION = 7;
+const CURRENT_VERSION = 8;
 
 function columnExists(
   db: SQLite.SQLiteDatabase,
@@ -270,6 +270,25 @@ function migrateV7(db: SQLite.SQLiteDatabase): void {
   db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_contract ON reports(contract_id)');
 }
 
+// V8: the report forms the office sets on the website (replaced on every sync), and the form each report was built from.
+// form_rows is kept on the report so an open report keeps its boxes when the website's form changes later.
+function migrateV8(db: SQLite.SQLiteDatabase): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS report_forms (
+      scope TEXT NOT NULL,
+      key TEXT NOT NULL,
+      report_type TEXT DEFAULT '',
+      rows TEXT,
+      materials TEXT,
+      setup TEXT,
+      changed_at TEXT DEFAULT '',
+      PRIMARY KEY (scope, key)
+    );
+  `);
+  if (!columnExists(db, 'reports', 'form_rows')) db.execSync('ALTER TABLE reports ADD COLUMN form_rows TEXT');
+  if (!columnExists(db, 'reports', 'form_source')) db.execSync('ALTER TABLE reports ADD COLUMN form_source TEXT');
+}
+
 export function runMigrations(db: SQLite.SQLiteDatabase): void {
   const version = getSchemaVersion(db);
 
@@ -306,6 +325,11 @@ export function runMigrations(db: SQLite.SQLiteDatabase): void {
   if (getSchemaVersion(db) < 7) {
     migrateV7(db);
     setSchemaVersion(db, 7);
+  }
+
+  if (getSchemaVersion(db) < 8) {
+    migrateV8(db);
+    setSchemaVersion(db, 8);
   }
 
   if (getSchemaVersion(db) < CURRENT_VERSION) {
