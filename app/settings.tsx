@@ -4,6 +4,7 @@ import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native'
 import { Button } from '@/components/Button';
 import { FormField } from '@/components/FormField';
 import { UnitsSelector } from '@/components/UnitsSelector';
+import { IconText } from '@/components/Icon';
 import { colors, fontSize, spacing } from '@/constants/theme';
 import { getReportsToUpload } from '@/db/repositories/reports';
 import {
@@ -20,7 +21,6 @@ import {
   saveGlobalUnits,
 } from '@/utils/units';
 import { GlobalUnits, PressureUnit, TempUnit } from '@/types';
-import { formatDisplayDate } from '@/utils/helpers';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -33,7 +33,9 @@ export default function SettingsScreen() {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    setLink(await loadWebLink());
+    const current = await loadWebLink();
+    setLink(current);
+    if (current?.signedOut) setAddress((typed) => typed || current.baseUrl);
     setWaiting(getReportsToUpload().length);
   }, []);
 
@@ -80,7 +82,9 @@ export default function SettingsScreen() {
           ? `تم رفع ${result.uploaded} تقرير وتحديث بيانات المعدات.`
           : result.message === 'offline'
             ? 'لا يوجد اتصال بالموقع. ستتم المحاولة تلقائياً لاحقاً.'
-            : result.message,
+            : result.message === 'signed out'
+              ? 'تم تسجيل الدخول بهذا المستخدم على هاتف آخر. سجّل الدخول من جديد لرفع التقارير.'
+              : result.message,
       );
     } finally {
       setBusy(false);
@@ -106,13 +110,13 @@ export default function SettingsScreen() {
       <Text style={styles.heading}>الإعدادات</Text>
 
       <Text style={styles.section}>الربط مع موقع ASEE</Text>
-      {link ? (
+      {link && !link.signedOut ? (
         <View style={styles.box}>
-          <Text style={styles.line}>✓ متصل باسم: {link.userName}</Text>
+          <IconText icon="check" text={`متصل باسم: ${link.userName}`} color={colors.success} textStyle={styles.line} />
           <Text style={styles.small}>{link.baseUrl}</Text>
           <Text style={styles.line}>
             المعدات المنزّلة: {link.machineCount}
-            {link.lastSync ? ` — آخر مزامنة: ${formatDisplayDate(link.lastSync.slice(0, 10))}` : ''}
+            {link.lastSync ? ` — آخر مزامنة: ${link.lastSync.slice(0, 10)}` : ''}
           </Text>
           <Text style={[styles.line, waiting > 0 && styles.waiting]}>
             تقارير بانتظار الرفع: {waiting}
@@ -138,6 +142,11 @@ export default function SettingsScreen() {
         </View>
       ) : (
         <View style={styles.box}>
+          {link?.signedOut ? (
+            <Text style={[styles.small, { color: colors.danger }]}>
+              تم تسجيل الدخول باسم {link.userName} على هاتف آخر، فتوقف رفع التقارير من هذا الهاتف. سجّل الدخول من جديد.
+            </Text>
+          ) : null}
           <Text style={styles.small}>
             سجّل الدخول بحساب الموقع لتنزيل العملاء والمعدات وروابط المستندات، ورفع التقارير تلقائياً عند توفر الإنترنت.
           </Text>

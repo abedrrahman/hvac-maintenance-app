@@ -38,6 +38,7 @@ import {
   Visit,
   VoltageTypeConfig,
 } from '@/types';
+import { deletePicture } from '@/services/photos';
 import { formatDate, generateId } from '@/utils/helpers';
 import { DEFAULT_UNITS, convertChecklistValueOnUnitChange } from '@/utils/units';
 
@@ -63,13 +64,17 @@ function rowToReport(row: Record<string, unknown>): Report {
     updated_at: row.updated_at as string,
     uploaded_at: (row.uploaded_at as string) ?? null,
     upload_error: (row.upload_error as string) ?? '',
-    visit_group: (row.visit_group as string) ?? null,
     visit_id: (row.visit_id as number) ?? null,
     contract_id: (row.contract_id as number) ?? null,
     contract_number: (row.contract_number as string) ?? '',
     contract_title: (row.contract_title as string) ?? '',
     contract_batch_id: (row.contract_batch_id as string) ?? null,
   };
+}
+
+/** Reports still being filled in. */
+export function countOpenReports(): number {
+  return getDatabase().getFirstSync<{ n: number }>("SELECT COUNT(*) AS n FROM reports WHERE status = 'open'")?.n ?? 0;
 }
 
 /** Locked reports that have not reached the website yet, oldest first. */
@@ -312,6 +317,16 @@ export async function createReport(
     seedAttentionRows(id);
   }
 
+  // the unit's refrigerant does not change between visits
+  const last = previousReport ? valuesByKey(previousReport.checklist_items) : {};
+  const refrigerant = last.refrigerant || last.refrigerant_type || machineTemplate?.refrigerant_type;
+  if (refrigerant) {
+    db.runSync(
+      "UPDATE checklist_items SET value = ? WHERE report_id = ? AND field_key IN ('refrigerant', 'refrigerant_type')",
+      [refrigerant, id],
+    );
+  }
+
   if (machineId) {
     const machine = getMachineById(machineId);
     if (machine && !previousReport) {
@@ -391,7 +406,7 @@ export function saveMachineTemplateFromReport(report: FullReport): void {
   report.checklist_items.forEach((item) => {
     if (item.field_key === 'compressor_count') compressorCount = parseInt(item.value, 10) || 1;
     if (item.field_key === 'circuit_count') circuitCount = parseInt(item.value, 10) || 1;
-    if (item.field_key === 'refrigerant_type') refrigerantType = item.value;
+    if (item.field_key === 'refrigerant' || item.field_key === 'refrigerant_type') refrigerantType = item.value;
     const vtMatch = item.field_key?.match(/^compressor_(\d+)_voltage_type$/);
     if (vtMatch && item.value) {
       voltageTypes.push({
@@ -463,6 +478,11 @@ export function syncUnitRows(reportId: string): void {
     if (at !== undefined && !kept.has(key)) {
       kept.add(key);
       if (item.sort_order !== at) db.runSync('UPDATE checklist_items SET sort_order = ? WHERE id = ?', [at, item.id]);
+      const { labelEn, labelAr } = desired[at];
+      // a renamed row (Extract Fan -> Exhaust Fan) gets its new name in open reports too
+      if (item.label_en !== labelEn || item.label_ar !== labelAr) {
+        db.runSync('UPDATE checklist_items SET label_en = ?, label_ar = ? WHERE id = ?', [labelEn, labelAr, item.id]);
+      }
     } else if (
       !item.is_custom &&
       (templateKeys.has(key) ||
@@ -699,6 +719,30 @@ export function addAttentionRow(reportId: string): void {
   );
 }
 
+/** An alarm from the alarm list, written as "Alarm <code>: <name>" so the report can link back to it. */
+export const ALARM_NOTE = /^Alarm ([^:]+):/;
+
+/** Puts an alarm in "Needs attention": in the first empty row, or a new row when none is empty. */
+export function addAlarmToReport(reportId: string, code: string, name: string): void {
+  const db = getDatabase();
+  if (getReportById(reportId)?.status !== 'open') return; // a signed report stays as it was signed
+  const note = name.trim() ? `Alarm ${code.trim()}: ${name.trim()}` : `Alarm ${code.trim()}:`;
+  const empty = db.getFirstSync<{ id: string }>(
+    "SELECT id FROM attention_notes WHERE report_id = ? AND TRIM(note) = '' AND TRIM(unit_no) = '' ORDER BY sort_order LIMIT 1",
+    [reportId],
+  );
+  if (empty) {
+    updateAttentionNote(empty.id, '', note);
+    return;
+  }
+  addAttentionRow(reportId);
+  const added = db.getFirstSync<{ id: string }>(
+    'SELECT id FROM attention_notes WHERE report_id = ? ORDER BY sort_order DESC LIMIT 1',
+    [reportId],
+  );
+  updateAttentionNote(added!.id, '', note);
+}
+
 export function updateMaterial(
   id: string,
   description: string,
@@ -761,7 +805,9 @@ export function updatePhotoCaption(id: string, caption: string): void {
 
 export function deletePhoto(id: string): void {
   const db = getDatabase();
+  const photo = db.getFirstSync<{ uri: string }>('SELECT uri FROM photos WHERE id = ?', [id]);
   db.runSync('DELETE FROM photos WHERE id = ?', [id]);
+  deletePicture(photo?.uri);
 }
 
 export function saveSignature(
@@ -806,6 +852,10 @@ export function lockReport(id: string): void {
 
 export function deleteReport(id: string): void {
   const db = getDatabase();
+  const pictures = db.getAllSync<{ uri: string }>(
+    'SELECT uri FROM photos WHERE report_id = ? UNION ALL SELECT logo_uri FROM reports WHERE id = ?',
+    [id, id],
+  );
   db.withTransactionSync(() => {
     db.runSync('DELETE FROM checklist_items WHERE report_id = ?', [id]);
     db.runSync('DELETE FROM attention_notes WHERE report_id = ?', [id]);
@@ -814,6 +864,7 @@ export function deleteReport(id: string): void {
     db.runSync('DELETE FROM signatures WHERE report_id = ?', [id]);
     db.runSync('DELETE FROM reports WHERE id = ?', [id]);
   });
+  pictures.forEach((p) => deletePicture(p.uri));
 }
 
 export function getCustomChecklistTemplates(): CustomChecklistTemplate[] {
@@ -933,13 +984,14 @@ export interface SignatureInput {
 }
 
 /**
- * The contract's "sign all": the two signatures go into every chosen report, which all get one batch id and are locked.
+ * The contract's "sign all": the technician's signature (and the customer's, when given) go into every chosen report, which all get one batch id and are locked.
  * All of them or none: one transaction. Returns the batch id.
  */
 export function signContractReports(
   reportIds: string[],
   technician: SignatureInput,
-  client: SignatureInput,
+  /** null: the customer did not sign. The technician's signature is always needed. */
+  client: SignatureInput | null,
   signedAt: string,
 ): string {
   const db = getDatabase();
@@ -949,7 +1001,7 @@ export function signContractReports(
       const report = getReportById(id);
       if (!report || report.status !== 'open') return;
       saveSignature(id, 'technician', technician.image, technician.name, signedAt);
-      saveSignature(id, 'client', client.image, client.name, signedAt);
+      if (client) saveSignature(id, 'client', client.image, client.name, signedAt);
       db.runSync(
         "UPDATE reports SET contract_batch_id = ?, technician = CASE WHEN technician = '' THEN ? ELSE technician END WHERE id = ?",
         [batch, technician.name.trim(), id],

@@ -1,3 +1,4 @@
+import { IconText } from './Icon';
 import { colors, fontSize, spacing } from '@/constants/theme';
 import { forwardRef, useImperativeHandle, useRef } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -32,7 +33,7 @@ export const SignatureBlock = forwardRef<any, Props>(
         <View style={styles.container}>
           {!!label && <Text style={styles.label}>{label}</Text>}
           <View style={styles.readOnlyBox}>
-            <Text style={styles.signedText}>✓ Signed</Text>
+            <IconText icon="check" text="Signed" color={colors.success} textStyle={styles.signedText} />
           </View>
         </View>
       );

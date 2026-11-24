@@ -5,9 +5,12 @@ import {
   StyleSheet,
   Text
 } from 'react-native';
+import { IconName, IconText } from './Icon';
 
 interface Props {
   title: string;
+  /** A picture beside the title (where an emoji used to be). */
+  icon?: IconName;
   onPress: () => void;
   variant?: 'primary' | 'secondary' | 'accent' | 'danger';
   disabled?: boolean;
@@ -20,7 +23,9 @@ export function Button({
   variant = 'primary',
   disabled,
   loading,
+  icon,
 }: Props) {
+  const textStyle = [styles.text, variant === 'secondary' && styles.textDark];
   return (
     <Pressable
       style={({ pressed }) => [
@@ -33,10 +38,15 @@ export function Button({
       disabled={disabled || loading}>
       {loading ? (
         <ActivityIndicator color={colors.textLight} />
+      ) : icon ? (
+        <IconText
+          icon={icon}
+          text={title}
+          color={variant === 'secondary' ? colors.text : colors.textLight}
+          textStyle={textStyle}
+        />
       ) : (
-        <Text style={[styles.text, variant === 'secondary' && styles.textDark]}>
-          {title}
-        </Text>
+        <Text style={textStyle}>{title}</Text>
       )}
     </Pressable>
   );

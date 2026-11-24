@@ -1,4 +1,5 @@
 import { Button } from '@/components/Button';
+import { Icon } from '@/components/Icon';
 import { SignatureModal } from '@/components/SignatureModal';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
 import { colors, fontSize, spacing } from '@/constants/theme';
@@ -65,7 +66,7 @@ export default function ContractScreen() {
   };
 
   const signAll = async () => {
-    if (!technician || !client) return;
+    if (!technician) return;
     setBusy('sign');
     try {
       signContractReports(chosen.map((u) => u.report!.id), technician, client, formatDate());
@@ -89,13 +90,13 @@ export default function ContractScreen() {
   };
 
   const confirmSignAll = () => {
-    if (!technician || !client) {
-      Alert.alert('تنبيه', 'يجب توقيع الفني والعميل أولاً.');
+    if (!technician) {
+      Alert.alert('تنبيه', 'يجب توقيع الفني أولاً.');
       return;
     }
     Alert.alert(
       'توقيع الكل',
-      `سيتم وضع التوقيعين في ${chosen.length} تقرير وقفلها نهائياً:\n${chosen.map((u) => u.unitName).join('، ')}\n\nمتابعة؟`,
+      `سيتم وضع ${client ? 'التوقيعين' : 'توقيع الفني'} في ${chosen.length} تقرير وقفلها نهائياً:\n${chosen.map((u) => u.unitName).join('، ')}${client ? '' : '\n\nالعميل لم يوقّع: ستُقفل التقارير بدون توقيع العميل.'}\n\nمتابعة؟`,
       [
         { text: 'إلغاء', style: 'cancel' },
         { text: 'توقيع وقفل', onPress: signAll },
@@ -161,7 +162,11 @@ export default function ContractScreen() {
                   accessibilityRole="checkbox"
                   accessibilityState={{ checked: ticked }}
                   onPress={() => toggle(item.report!.id)}>
-                  <Text style={[styles.tickText, ticked && styles.tickOn]}>{ticked ? '☑' : '☐'}</Text>
+                  <Icon
+                    name={ticked ? 'checkbox-on' : 'checkbox-off'}
+                    size={28}
+                    color={ticked ? colors.brand : colors.textSecondary}
+                  />
                 </Pressable>
               ) : null}
               <Pressable style={styles.cardBody} onPress={() => openUnit(item)}>
@@ -185,19 +190,21 @@ export default function ContractScreen() {
             <View style={styles.foot}>
               <Text style={styles.footTitle}>توقيع الكل / Sign all</Text>
               <Text style={styles.note}>
-                التقارير المختارة: {chosen.length} من {ready.length} جاهزة. يوقّع العميل مرة واحدة لكل التقارير المختارة.
+                التقارير المختارة: {chosen.length} من {ready.length} جاهزة. توقيع الفني مطلوب، وتوقيع العميل اختياري ويكون مرة واحدة لكل التقارير المختارة.
               </Text>
               <View style={styles.signs}>
                 <View style={styles.sign}>
                   <Button
-                    title={technician ? `✓ ${technician.name || 'توقيع الفني'}` : 'توقيع الفني'}
+                    title={technician ? technician.name || 'توقيع الفني' : 'توقيع الفني'}
+                    icon={technician ? 'check' : 'pen'}
                     onPress={() => setSigning('technician')}
                     variant="secondary"
                   />
                 </View>
                 <View style={styles.sign}>
                   <Button
-                    title={client ? `✓ ${client.name || 'توقيع العميل'}` : 'توقيع العميل'}
+                    title={client ? client.name || 'توقيع العميل' : 'توقيع العميل'}
+                    icon={client ? 'check' : 'pen'}
                     onPress={() => setSigning('client')}
                     variant="secondary"
                   />
@@ -207,7 +214,7 @@ export default function ContractScreen() {
                 title={`توقيع وقفل ${chosen.length} تقرير`}
                 onPress={confirmSignAll}
                 variant="accent"
-                disabled={chosen.length === 0 || !technician || !client}
+                disabled={chosen.length === 0 || !technician}
                 loading={busy === 'sign'}
               />
             </View>
@@ -252,8 +259,6 @@ const styles = StyleSheet.create({
   cardChosen: { borderColor: colors.brand, backgroundColor: colors.accentLight },
   cardBody: { flex: 1, padding: spacing.md },
   tick: { paddingHorizontal: spacing.md, paddingVertical: spacing.md },
-  tickText: { fontSize: 26, color: colors.textSecondary },
-  tickOn: { color: colors.brand },
   unit: { fontSize: fontSize.md, fontWeight: '700', color: colors.text, textAlign: 'right' },
   type: { fontSize: fontSize.sm, color: colors.accent, textAlign: 'right', marginTop: 2 },
   status: { fontSize: fontSize.sm, textAlign: 'right', marginTop: 4 },

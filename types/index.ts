@@ -128,8 +128,6 @@ export interface Report {
   /** When the locked report reached the website; empty while it waits for a connection. */
   uploaded_at: string | null;
   upload_error: string;
-  /** Reports of the older contract-visit screen ("date|client"). Kept for those reports; new ones use the contract. */
-  visit_group: string | null;
   /** The website visit this report closes. */
   visit_id: number | null;
   contract_id: number | null;

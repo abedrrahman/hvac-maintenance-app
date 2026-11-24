@@ -1,7 +1,8 @@
 import { Button } from '@/components/Button';
 import { DropdownPicker } from '@/components/DropdownPicker';
-import { MAINTENANCE_TYPES } from '@/constants/company';
+import { MAINTENANCE_TYPES, maintenanceLabel } from '@/constants/company';
 import { MACHINE_TYPES, getMachineTypeInfo } from '@/constants/machineTypes';
+import { IconText } from '@/components/Icon';
 import { colors, fontSize, spacing } from '@/constants/theme';
 import { findMachines } from '@/db/repositories/machines';
 import {
@@ -131,7 +132,7 @@ export default function NewReportScreen() {
 
       {selectedMachine && (
         <View style={styles.selectedBox}>
-          <Text style={styles.selectedTitle}>✓ معدة محددة</Text>
+          <IconText icon="check" text="معدة محددة" color={colors.accent} textStyle={styles.selectedTitle} />
           <Text style={styles.selectedText}>
             {selectedMachine.name || selectedMachine.model} — {selectedMachine.client_name}
           </Text>
@@ -176,7 +177,7 @@ export default function NewReportScreen() {
           <Pressable
             style={styles.dropdown}
             onPress={() => setShowMaintenancePicker(true)}>
-            <Text style={styles.dropdownText}>{maintenanceType}</Text>
+            <Text style={styles.dropdownText}>{maintenanceLabel(maintenanceType)}</Text>
           </Pressable>
           <Button
             title="إنشاء التقرير"
@@ -192,6 +193,7 @@ export default function NewReportScreen() {
         options={[...MAINTENANCE_TYPES]}
         selected={maintenanceType}
         onSelect={(v) => setMaintenanceType(v as MaintenanceType)}
+        label={maintenanceLabel}
         onClose={() => setShowMaintenancePicker(false)}
         title="نوع الصيانة"
       />

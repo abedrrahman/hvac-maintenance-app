@@ -8,12 +8,13 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Icon, IconText } from '@/components/Icon';
+import { maintenanceLabel } from '@/constants/company';
 import { colors, fontSize, spacing } from '@/constants/theme';
 import { getMachineById, parseTemplateJson } from '@/db/repositories/machines';
 import { getReportsByMachineId } from '@/db/repositories/reports';
 import { isSaved, openDocument, saveDocument } from '@/services/offlineDocs';
 import { Machine, Report, WebDocument } from '@/types';
-import { formatDisplayDate } from '@/utils/helpers';
 
 const megabytes = (bytes: number) => `${Math.max(bytes / 1048576, 0.1).toFixed(1)} MB`;
 
@@ -84,65 +85,70 @@ export default function MachineDetailScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>{machine.name || machine.model || 'معدة'}</Text>
-        {machine.name ? <Text style={styles.sub}>{machine.model}</Text> : null}
-        <Text style={styles.sub}>{machine.client_name} — {machine.site}</Text>
-        {machine.project ? (
-          <Text style={styles.sub}>المشروع: {machine.project}</Text>
-        ) : null}
-        {machine.serial_number ? (
-          <Text style={styles.sub}>S/N: {machine.serial_number}</Text>
-        ) : null}
-        {machine.brand ? (
-          <Text style={styles.sub}>العلامة: {machine.brand}</Text>
-        ) : null}
-        {machine.capacity ? (
-          <Text style={styles.sub}>السعة: {machine.capacity}</Text>
-        ) : null}
-      </View>
-
-      {documents.length > 0 && (
-        <View style={styles.docs}>
-          <Text style={styles.sectionTitle}>المستندات ({documents.length})</Text>
-          {documents.some((doc) => !isSaved(doc)) && (
-            <Pressable
-              style={[styles.docRow, styles.saveAll]}
-              disabled={busy !== null}
-              accessibilityRole="button"
-              onPress={saveAll}>
-              <Text style={styles.saveAllText}>
-                {busy === 'all' ? 'جاري التنزيل...' : 'تنزيل كل المستندات للعمل بدون إنترنت'}
-              </Text>
-            </Pressable>
-          )}
-          {documents.map((doc) => (
-            <Pressable
-              key={doc.url}
-              style={styles.docRow}
-              disabled={busy !== null}
-              accessibilityRole="button"
-              onPress={() => open(doc)}>
-              <Text style={styles.docName}>{doc.name}</Text>
-              <Text style={styles.tech}>
-                {doc.type} ·{' '}
-                {busy === doc.url
-                  ? 'جاري التنزيل...'
-                  : isSaved(doc)
-                    ? '✓ محفوظ على الهاتف'
-                    : `اضغط للتنزيل${doc.size ? ` (${megabytes(doc.size)})` : ''}`}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
-
-      <Text style={styles.sectionTitle}>سجل التقارير ({reports.length})</Text>
-
       <FlatList
         data={reports}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
+        ListHeaderComponent={
+          <>
+          <View style={styles.header}>
+            <Text style={styles.title}>{machine.name || machine.model || 'معدة'}</Text>
+            {machine.name ? <Text style={styles.sub}>{machine.model}</Text> : null}
+            <Text style={styles.sub}>{machine.client_name} — {machine.site}</Text>
+            {machine.project ? (
+              <Text style={styles.sub}>المشروع: {machine.project}</Text>
+            ) : null}
+            {machine.serial_number ? (
+              <Text style={styles.sub}>S/N: {machine.serial_number}</Text>
+            ) : null}
+            {machine.brand ? (
+              <Text style={styles.sub}>العلامة: {machine.brand}</Text>
+            ) : null}
+            {machine.capacity ? (
+              <Text style={styles.sub}>السعة: {machine.capacity}</Text>
+            ) : null}
+          </View>
+
+          {documents.length > 0 && (
+            <View style={styles.docs}>
+              <Text style={styles.sectionTitle}>المستندات ({documents.length})</Text>
+              {documents.some((doc) => !isSaved(doc)) && (
+                <Pressable
+                  style={[styles.docRow, styles.saveAll]}
+                  disabled={busy !== null}
+                  accessibilityRole="button"
+                  onPress={saveAll}>
+                  <Text style={styles.saveAllText}>
+                    {busy === 'all' ? 'جاري التنزيل...' : 'تنزيل كل المستندات للعمل بدون إنترنت'}
+                  </Text>
+                </Pressable>
+              )}
+              {documents.map((doc) => (
+                <Pressable
+                  key={doc.url}
+                  style={styles.docRow}
+                  disabled={busy !== null}
+                  accessibilityRole="button"
+                  onPress={() => open(doc)}>
+                  <Text style={styles.docName}>{doc.name}</Text>
+                  {busy !== doc.url && isSaved(doc) ? (
+                    <IconText icon="check" text={`${doc.type} · محفوظ على الهاتف`} color={colors.success} textStyle={styles.tech} />
+                  ) : (
+                    <Text style={styles.tech}>
+                      {doc.type} ·{' '}
+                      {busy === doc.url
+                        ? 'جاري التنزيل...'
+                        : `اضغط للتنزيل${doc.size ? ` (${megabytes(doc.size)})` : ''}`}
+                    </Text>
+                  )}
+                </Pressable>
+              ))}
+            </View>
+          )}
+
+          <Text style={styles.sectionTitle}>سجل التقارير ({reports.length})</Text>
+          </>
+        }
         ListEmptyComponent={
           <Text style={styles.empty}>لا توجد تقارير لهذه المعدة.</Text>
         }
@@ -157,12 +163,12 @@ export default function MachineDetailScreen() {
               )
             }>
             <View style={styles.reportRow}>
-              <Text style={styles.date}>{formatDisplayDate(item.date)}</Text>
+              <Text style={styles.date}>{item.date}</Text>
               {item.status === 'locked' && (
-                <Text style={styles.locked}>🔒</Text>
+                <Icon name="lock" size={16} color={colors.locked} />
               )}
             </View>
-            <Text style={styles.maint}>{item.maintenance_type}</Text>
+            <Text style={styles.maint}>{maintenanceLabel(item.maintenance_type)}</Text>
             <Text style={styles.tech}>{item.technician}</Text>
           </Pressable>
         )}
@@ -221,12 +227,13 @@ const styles = StyleSheet.create({
     color: colors.primary,
     textAlign: 'right',
   },
-  list: { padding: spacing.md, paddingTop: 0 },
-  empty: { textAlign: 'center', color: colors.textSecondary },
+  list: { paddingBottom: spacing.xl },
+  empty: { textAlign: 'center', color: colors.textSecondary, padding: spacing.md },
   reportCard: {
     backgroundColor: colors.surface,
     borderRadius: 10,
     padding: spacing.md,
+    marginHorizontal: spacing.md,
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,

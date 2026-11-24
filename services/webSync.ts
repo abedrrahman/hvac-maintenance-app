@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 import { getDatabase } from '@/db/database';
-import { replaceAlarms } from '@/db/repositories/alarms';
+import { countAlarms, replaceAlarms } from '@/db/repositories/alarms';
 import { getMachineById, getWebMachineKeys, removeWebMachinesNotIn, upsertWebMachine } from '@/db/repositories/machines';
 import {
   getFullReport,
@@ -42,6 +42,8 @@ export interface WebLink {
   newUnits?: number;
   /** Which alarm list the phone holds, so the website sends it again only when it changed. */
   alarmVersion?: string;
+  /** The website stopped accepting this phone's token (the same user signed in elsewhere). Cleared by signing in again. */
+  signedOut?: boolean;
 }
 
 /** Brings the website's alarm list onto the phone (about 1 MB, only when it changed). */
@@ -58,21 +60,29 @@ async function downloadAlarms(link: WebLink): Promise<void> {
   await saveWebLink({ ...current, alarmVersion: data.version });
 }
 
+/** The alarm screen's "download" button: the whole list again, even when the phone thinks it has the latest. */
+export async function downloadAlarmList(): Promise<number> {
+  const link = await loadWebLink();
+  if (!link) throw new Error('not signed in');
+  await downloadAlarms({ ...link, alarmVersion: '' });
+  return countAlarms();
+}
+
 export interface BotAlarm {
   code: string;
   name: string;
-  controllers: string[];
-  effect: string;
-  causes: string;
-  note: string;
-  steps: { label: string; text: string }[];
-  source: { name: string; page: number };
+  controllers?: string[];
+  effect?: string;
+  causes?: string;
+  note?: string;
+  steps?: { label: string; text: string }[];
+  source?: { name?: string; page?: number };
 }
 
 export interface BotAnswer {
-  text: string;
+  text?: string;
   alarms?: BotAlarm[];
-  passages?: { snippet: string; source: { name: string; page: number } }[];
+  passages?: { snippet?: string; source?: { name?: string; page?: number } }[];
 }
 
 const BOT_TIMEOUT_MS = 8000;
@@ -135,16 +145,20 @@ export async function signOut(): Promise<void> {
   await SecureStore.deleteItemAsync(TOKEN_KEY);
 }
 
+/** Always https: Android blocks plain http, and the password must not travel unencrypted. */
 function cleanBaseUrl(text: string): string {
-  const url = text.trim().replace(/\/+$/, '');
-  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  const url = text.trim().replace(/\/+$/, '').replace(/^https?:\/\//i, '');
+  return `https://${url}`;
 }
 
 async function request(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const signedIn = !!(init.headers as Record<string, string> | undefined)?.Authorization;
+    if (response.status === 401 && signedIn) throw new SignedOutError('signed out');
+    return response;
   } finally {
     clearTimeout(timer);
   }
@@ -162,6 +176,9 @@ async function errorText(response: Response): Promise<string> {
 
 /** The website refused this report itself (unknown unit, bad data, no permission): sending it again unchanged cannot help. */
 class RefusedError extends Error {}
+
+/** The website refused the token: every request will fail the same way until the user signs in again. */
+class SignedOutError extends Error {}
 
 export async function signIn(
   baseUrlText: string,
@@ -377,6 +394,9 @@ async function uploadReport(link: WebLink, reportId: string): Promise<void> {
     if ([400, 403, 404].includes(response.status)) throw new RefusedError(await errorText(response));
     if (!response.ok) throw new Error(await errorText(response));
   } finally {
+    // the PDF is made again for every try, so this copy is not needed any more
+    const pdf = new File(pdfUri);
+    if (pdf.exists) pdf.delete();
     if (signatureFolder.exists) signatureFolder.delete();
   }
 }
@@ -390,6 +410,7 @@ const RETRY_UPLOADS_AFTER_MS = 10 * 60000;
 export async function syncNow(options: { download?: boolean; manual?: boolean } = {}): Promise<SyncResult> {
   const link = await loadWebLink();
   if (!link) return { ok: false, message: 'not signed in', uploaded: 0, waiting: getReportsToUpload().length };
+  if (link.signedOut) return { ok: false, message: 'signed out', uploaded: 0, waiting: getReportsToUpload().length };
   if (running) return { ok: true, message: 'already running', uploaded: 0, waiting: getReportsToUpload().length };
   running = true;
   let uploaded = 0;
@@ -411,6 +432,7 @@ export async function syncNow(options: { download?: boolean; manual?: boolean } 
         markReportUploaded(report.id);
         uploaded += 1;
       } catch (error) {
+        if (error instanceof SignedOutError) throw error;
         // Kept for the next sync. The website ignores a report it already has, so trying again is safe.
         message = error instanceof Error ? error.message : String(error);
         if (error instanceof RefusedError) markReportUploadError(report.id, message);
@@ -422,9 +444,16 @@ export async function syncNow(options: { download?: boolean; manual?: boolean } 
         await downloadSiteData(link);
         await downloadAlarms((await loadWebLink()) ?? link);
       } catch (error) {
+        if (error instanceof SignedOutError) throw error;
         message = error instanceof Error ? error.message : String(error);
       }
     }
+  } catch (error) {
+    if (!(error instanceof SignedOutError)) throw error;
+    // stop trying: the report cards and the home screen ask the user to sign in again
+    const current = (await loadWebLink()) ?? link;
+    await saveWebLink({ ...current, signedOut: true });
+    message = 'signed out';
   } finally {
     running = false;
   }

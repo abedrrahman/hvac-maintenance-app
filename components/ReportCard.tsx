@@ -1,9 +1,10 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { IconText } from './Icon';
 import { colors, fontSize, spacing } from '@/constants/theme';
+import { maintenanceLabel } from '@/constants/company';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
 import { Report } from '@/types';
-import { formatDisplayDate } from '@/utils/helpers';
 
 interface Props {
   report: Report;
@@ -24,7 +25,7 @@ export function ReportCard({ report, onPress, onLongPress }: Props) {
         <Text style={styles.type}>{machineInfo.labelEn}</Text>
         {isLocked && (
           <View style={styles.lockBadge}>
-            <Text style={styles.lockText}>🔒 SIGNED & LOCKED</Text>
+            <IconText icon="lock" text="SIGNED & LOCKED" color={colors.textLight} textStyle={styles.lockText} />
           </View>
         )}
         {!isLocked && (
@@ -36,18 +37,16 @@ export function ReportCard({ report, onPress, onLongPress }: Props) {
       <Text style={styles.client}>{report.client || 'No client'}</Text>
       <Text style={styles.site}>{report.site || 'No site'}</Text>
       <View style={styles.footer}>
-        <Text style={styles.date}>{formatDisplayDate(report.date)}</Text>
-        <Text style={styles.maintenance}>{report.maintenance_type}</Text>
+        <Text style={styles.date}>{report.date}</Text>
+        <Text style={styles.maintenance}>{maintenanceLabel(report.maintenance_type)}</Text>
       </View>
-      {isLocked && (
-        <Text style={[styles.upload, report.uploaded_at ? styles.uploaded : null]}>
-          {report.uploaded_at
-            ? '✓ تم الرفع إلى الموقع'
-            : report.upload_error
-              ? `لم يُرفع: ${report.upload_error}`
-              : 'بانتظار الرفع إلى الموقع'}
+      {isLocked && report.uploaded_at ? (
+        <IconText icon="check" text="تم الرفع إلى الموقع" color={colors.success} textStyle={styles.upload} />
+      ) : isLocked ? (
+        <Text style={styles.upload}>
+          {report.upload_error ? `لم يُرفع: ${report.upload_error}` : 'بانتظار الرفع إلى الموقع'}
         </Text>
-      )}
+      ) : null}
     </Pressable>
   );
 }

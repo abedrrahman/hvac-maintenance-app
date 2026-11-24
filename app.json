@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "HVAC Maintenance Reports",
+    "name": "ASEE Maintenance",
     "slug": "hvac-maintenance-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -39,7 +39,6 @@
       ],
       "expo-sqlite",
       "expo-sharing",
-      "expo-image",
       "@react-native-community/datetimepicker",
       [
         "expo-image-picker",

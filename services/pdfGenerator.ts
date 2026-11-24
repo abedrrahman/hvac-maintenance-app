@@ -1,13 +1,16 @@
 import { getFieldDefinitions } from '@/constants/checklists';
-import { COMPANY } from '@/constants/company';
+import { COMPANY, maintenanceAr } from '@/constants/company';
+import { CIAT_LOGO, COMPANY_LOGO } from '@/constants/logos';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
 import { ChecklistFieldDef, ChecklistItem, FullReport, Signature } from '@/types';
 import { visibleChecklistItems } from '@/utils/chillerFields';
 import { hasValue, reportNumber } from '@/utils/helpers';
 import { pressureUnitLabel, tempUnitLabel } from '@/utils/units';
-import { Asset } from 'expo-asset';
 import { File } from 'expo-file-system';
+import * as IntentLauncher from 'expo-intent-launcher';
 import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { Platform } from 'react-native';
 
 // Same colours as the app and the ASEE website.
 const BRAND = '#D1003C';
@@ -36,23 +39,14 @@ async function imageData(uri: string | null): Promise<string> {
   }
 }
 
-/** A logo shipped inside the app. */
-async function bundledLogo(module: number): Promise<string> {
-  try {
-    const asset = Asset.fromModule(module);
-    await asset.downloadAsync();
-    return await imageData(asset.localUri);
-  } catch {
-    return '';
-  }
-}
-
 function styles(): string {
   return `
     @page { size: A4; margin: 0; }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 10.5px; color: ${INK}; }
     .ar { direction: rtl; unicode-bidi: isolate; }
+    /* Arabic on its own line under the English: the two never overlap, however long either is */
+    .under { display: block; text-align: right; margin-top: 2px; }
 
     /* The outer table only repeats an empty top and bottom band on every printed page, so text never runs under the footer. */
     table.frame { width: 100%; border-collapse: collapse; }
@@ -76,15 +70,17 @@ function styles(): string {
     .head img.brand { max-height: 52px; max-width: 150px; object-fit: contain; }
     .title {
       margin: 9px 0 12px; padding: 9px 12px; background: ${BRAND}; color: #fff; border-radius: 6px;
-      display: flex; justify-content: space-between; align-items: center;
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
     }
+    .title .name .under { font-size: 13px; text-align: left; }
+    .title .no { white-space: nowrap; }
     .title .name { font-size: 16px; font-weight: bold; }
     .title .no { font-size: 10px; opacity: 0.9; }
 
     h2 {
       margin: 14px 0 6px; padding: 5px 9px; font-size: 11.5px; background: ${TINT}; color: ${BRAND};
       border-left: 4px solid ${BRAND}; border-radius: 3px;
-      display: flex; justify-content: space-between; page-break-after: avoid;
+      display: flex; justify-content: space-between; gap: 12px; page-break-after: avoid;
     }
 
     table.grid { width: 100%; border-collapse: collapse; }
@@ -92,7 +88,6 @@ function styles(): string {
     table.grid th { background: #F5F5F7; font-size: 9.5px; color: ${MUTED}; text-align: left; }
     table.grid tr, .block { page-break-inside: avoid; }
     td.k { width: 22%; background: #F5F5F7; font-size: 9.5px; color: ${MUTED}; }
-    td.k .ar { float: right; }
     td.v { width: 28%; font-weight: bold; }
     table.list td.en { width: 37%; }
     table.list td.val { width: 26%; text-align: center; font-weight: bold; }
@@ -110,7 +105,7 @@ function styles(): string {
 
     .signs { display: flex; gap: 12px; margin-top: 16px; page-break-inside: avoid; }
     .sign { flex: 1; border: 1px solid ${LINE}; border-radius: 6px; overflow: hidden; text-align: center; }
-    .sign .cap { background: #F5F5F7; padding: 5px 8px; font-size: 9.5px; color: ${MUTED}; display: flex; justify-content: space-between; }
+    .sign .cap { background: #F5F5F7; padding: 5px 8px; font-size: 9.5px; color: ${MUTED}; display: flex; justify-content: space-between; gap: 8px; }
     .sign .pad { height: 92px; display: flex; align-items: center; justify-content: center; }
     .sign img { max-height: 86px; max-width: 90%; }
     .sign .who { border-top: 1px solid ${LINE}; padding: 5px 8px; font-weight: bold; }
@@ -131,9 +126,24 @@ function shown(value: string): string {
   return hasValue(value) ? escapeHtml(value) : '<span class="empty">—</span>';
 }
 
+/** English with the Arabic on the line under it. */
+function both(en: string, ar: string): string {
+  return `${en}<span class="ar under">${ar}</span>`;
+}
+
+/** A column title of a table, in both languages. */
+function th(en: string, ar: string, width = ''): string {
+  return `<th${width ? ` style="width:${width}"` : ''}>${both(en, ar)}</th>`;
+}
+
 /** One "label | value" pair of the details grid. */
 function pair(en: string, ar: string, value: string, span = 1): string {
-  return `<td class="k">${en}<span class="ar">${ar}</span></td><td class="v" colspan="${span}">${shown(value)}</td>`;
+  return `<td class="k">${both(en, ar)}</td><td class="v" colspan="${span}">${shown(value)}</td>`;
+}
+
+/** A value with its Arabic under it, e.g. Preventive / صيانة وقائية. */
+function pairBoth(en: string, ar: string, valueEn: string, valueAr: string): string {
+  return `<td class="k">${both(en, ar)}</td><td class="v">${hasValue(valueEn) ? both(escapeHtml(valueEn), escapeHtml(valueAr)) : shown('')}</td>`;
 }
 
 function checklistValue(item: ChecklistItem, def: ChecklistFieldDef | undefined, report: FullReport): string {
@@ -182,23 +192,18 @@ interface Logos {
   ciat: string;
 }
 
-async function loadLogos(): Promise<Logos> {
-  const [company, ciat] = await Promise.all([
-    bundledLogo(require('@/assets/images/main_screen_icon.png')),
-    bundledLogo(require('@/assets/images/ciat-logo.png')),
-  ]);
-  return { company, ciat };
-}
+// Reading the logo files at print time gave an empty header in the release app.
+const LOGOS: Logos = { company: COMPANY_LOGO, ciat: CIAT_LOGO };
 
 /** Top of a page: CIAT (or the logo chosen for the report) on the left, the company logo on the right, then the red title bar. */
-function pageHead(logos: Logos, brand: string, title: string, number: string): string {
+function pageHead(logos: Logos, brand: string, title: string, number: string, titleAr = ''): string {
   const left = brand || logos.ciat;
   return `<div class="head">
         ${left ? `<img class="brand" src="${left}"/>` : '<span></span>'}
         ${logos.company ? `<img class="company" src="${logos.company}"/>` : `<b>${escapeHtml(COMPANY.nameEn)}</b>`}
       </div>
       <div class="title">
-        <span class="name">${escapeHtml(title)}</span>
+        <span class="name">${escapeHtml(title)}${titleAr ? `<span class="ar under">${escapeHtml(titleAr)}</span>` : ''}</span>
         <span class="no">${escapeHtml(number)}</span>
       </div>`;
 }
@@ -227,12 +232,18 @@ async function reportSection(report: FullReport, logos: Logos, withSignatures: b
   const none = '<div class="text"><span class="empty">None — لا يوجد</span></div>';
 
   return `
-      ${pageHead(logos, brand, machine.reportTitle(report.maintenance_type), `Report No. ${reportNumber(report.id)}`)}
+      ${pageHead(
+        logos,
+        brand,
+        machine.reportTitle(report.maintenance_type),
+        `Report No. ${reportNumber(report.id)}`,
+        `تقرير ${maintenanceAr(report.maintenance_type) || report.maintenance_type} - ${machine.labelAr}`,
+      )}
 
       <table class="grid">
         <tr>${pair('Client', 'العميل', report.client)}${pair('Date', 'التاريخ', report.date)}</tr>
-        <tr>${pair('Site', 'الموقع', report.site)}${pair('Maintenance', 'نوع الصيانة', report.maintenance_type)}</tr>
-        <tr>${pair('Technician', 'الفني', report.technician)}${pair('Equipment', 'المعدة', machine.labelEn)}</tr>
+        <tr>${pair('Site', 'الموقع', report.site)}${pairBoth('Maintenance', 'نوع الصيانة', report.maintenance_type, maintenanceAr(report.maintenance_type))}</tr>
+        <tr>${pair('Technician', 'الفني', report.technician)}${pairBoth('Equipment', 'المعدة', machine.labelEn, machine.labelAr)}</tr>
         <tr>${pair('Model', 'الموديل', report.machine_model)}${pair('Serial No.', 'الرقم التسلسلي', report.serial_no)}</tr>
       </table>
 
@@ -247,7 +258,7 @@ async function reportSection(report: FullReport, logos: Logos, withSignatures: b
         attention.length === 0
           ? none
           : `<table class="grid">
-              <tr><th style="width:18%">Unit</th><th>Note</th></tr>
+              <tr>${th('Unit', 'الوحدة', '18%')}${th('Note', 'الملاحظة')}</tr>
               ${attention.map((n, i) => `<tr><td>${escapeHtml(n.unit_no || String(i + 1))}</td><td>${shown(n.note)}</td></tr>`).join('')}
             </table>`,
       )}
@@ -258,12 +269,12 @@ async function reportSection(report: FullReport, logos: Logos, withSignatures: b
         materials.length === 0
           ? none
           : `<table class="grid">
-              <tr><th>Description</th><th style="width:14%">Qty</th><th style="width:14%">Unit</th></tr>
+              <tr>${th('Description', 'الوصف')}${th('Qty', 'الكمية', '14%')}${th('Unit', 'الوحدة', '14%')}</tr>
               ${materials.map((m) => `<tr><td>${shown(m.description)}</td><td>${shown(m.qty)}</td><td>${escapeHtml(m.unit || '')}</td></tr>`).join('')}
             </table>`,
       )}
 
-      ${block('Notes', 'الملاحظات', `<div class="text">${shown(report.general_notes)}</div>`)}
+      <!-- Notes (general_notes) are left out on purpose: they are for the office and go to the website only. -->
 
       ${
         shownPhotos.length === 0
@@ -302,7 +313,7 @@ function documentHtml(sections: string[]): string {
 }
 
 export async function generateReportHtml(report: FullReport): Promise<string> {
-  return documentHtml([await reportSection(report, await loadLogos(), true)]);
+  return documentHtml([await reportSection(report, LOGOS, true)]);
 }
 
 /** One unit on the contract PDF's cover. The unit's report is left out of the PDF when it has none yet. */
@@ -334,12 +345,12 @@ const STATUS_TEXT: Record<ContractPdfUnit['status'], string> = {
  * then one page with the technician's and the client's signatures.
  */
 export async function generateContractHtml(info: ContractPdfInfo, units: ContractPdfUnit[]): Promise<string> {
-  const logos = await loadLogos();
+  const logos = LOGOS;
   const withReport = units.filter((u) => u.report);
   const number = info.number ? `Contract No. ${info.number}` : '';
 
   const cover = `
-      ${pageHead(logos, '', 'Contract Maintenance Report', number)}
+      ${pageHead(logos, '', 'Contract Maintenance Report', number, 'تقرير صيانة العقد')}
       <table class="grid">
         <tr>${pair('Contract', 'العقد', info.number)}${pair('Date', 'التاريخ', info.date)}</tr>
         <tr>${pair('Title', 'العنوان', info.title)}${pair('Units', 'عدد المعدات', String(units.length))}</tr>
@@ -347,7 +358,7 @@ export async function generateContractHtml(info: ContractPdfInfo, units: Contrac
       </table>
       ${heading('Units', 'المعدات')}
       <table class="grid">
-        <tr><th style="width:6%">#</th><th>Unit</th><th style="width:20%">Equipment</th><th style="width:20%">Serial No.</th><th style="width:22%">Status</th></tr>
+        <tr><th style="width:6%">#</th>${th('Unit', 'المعدة')}${th('Equipment', 'النوع', '20%')}${th('Serial No.', 'الرقم التسلسلي', '20%')}${th('Status', 'الحالة', '22%')}</tr>
         ${units
           .map(
             (u, i) => `<tr><td>${i + 1}</td><td>${shown(u.name)}</td><td>${escapeHtml(u.equipment)}</td>
@@ -362,7 +373,7 @@ export async function generateContractHtml(info: ContractPdfInfo, units: Contrac
   const signed = withReport.find((u) => u.report!.signatures.some((s) => s.type === 'client' && s.image_base64));
   const signedNames = withReport.filter((u) => u.status === 'signed').map((u) => escapeHtml(u.name || u.serial));
   const signaturePage = `
-      ${pageHead(logos, '', 'Signatures', number)}
+      ${pageHead(logos, '', 'Signatures', number, 'التوقيعات')}
       ${heading('Signatures', 'التوقيعات')}
       <div class="statement">
         ${signedNames.length
@@ -385,7 +396,23 @@ export async function exportReportPdf(report: FullReport): Promise<string> {
   return uri;
 }
 
-/** Opens the phone's print screen, where the PDF can be saved, printed or shared. */
+/**
+ * Opens the PDF in the phone's own PDF viewer (not the print screen).
+ * If the phone has no PDF viewer, the share menu opens instead.
+ */
 export async function sharePdf(uri: string): Promise<void> {
-  await Print.printAsync({ uri });
+  const file = new File(uri);
+  if (Platform.OS === 'android') {
+    try {
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: file.contentUri,
+        type: 'application/pdf',
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION: lets the viewer read this one file
+      });
+      return;
+    } catch {
+      // no app can open a PDF: fall through to the share menu
+    }
+  }
+  await Sharing.shareAsync(file.uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
 }

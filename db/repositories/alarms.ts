@@ -48,6 +48,16 @@ export function replaceAlarms(fields: string[], rows: unknown[][]): void {
   });
 }
 
+/**
+ * A new install has no alarms until it syncs: fill the list from the copy built into the app (scripts/save-alarms.ps1).
+ * The website's newer list replaces it at the first sync.
+ */
+export function loadBuiltInAlarms(): void {
+  if (countAlarms() > 0) return;
+  const data = require('@/assets/data/alarms.json') as { fields?: string[]; alarms?: unknown[][] | null };
+  if (data.fields?.length && data.alarms?.length) replaceAlarms(data.fields, data.alarms);
+}
+
 export function countAlarms(): number {
   return getDatabase().getFirstSync<{ c: number }>('SELECT COUNT(*) AS c FROM alarms')?.c ?? 0;
 }

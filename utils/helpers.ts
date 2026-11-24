@@ -34,15 +34,6 @@ export function base64ToBytes(text: string): Uint8Array {
   return bytes;
 }
 
-export function formatDisplayDate(dateStr: string): string {
-  if (!dateStr) return '';
-  const parts = dateStr.split('-');
-  if (parts.length === 3) {
-    return `${parts[0]}-${parts[1]}-${parts[2]}`;
-  }
-  return dateStr;
-}
-
 export function isReportLocked(status: string): boolean {
   return status === 'locked';
 }

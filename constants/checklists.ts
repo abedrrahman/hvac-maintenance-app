@@ -763,7 +763,7 @@ const WITH_COMPRESSORS: MachineType[] = ['chiller', 'fcu', 'split', 'rtu', 'dehu
 const WITH_AIR_FANS: MachineType[] = ['ahu', 'rtu', 'dehumidifier'];
 const FAN_KINDS = [
   { id: 'supply', en: 'Supply Fan', ar: 'مروحة التزويد', countAr: 'عدد مراوح التزويد' },
-  { id: 'extract', en: 'Extract Fan', ar: 'مروحة الطرد', countAr: 'عدد مراوح الطرد' },
+  { id: 'extract', en: 'Exhaust Fan', ar: 'مروحة الطرد', countAr: 'عدد مراوح الطرد' },
   { id: 'return', en: 'Return Fan', ar: 'مروحة الراجع', countAr: 'عدد مراوح الراجع' },
 ] as const;
 type FanKind = (typeof FAN_KINDS)[number]['id'];
