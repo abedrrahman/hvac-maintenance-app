@@ -47,7 +47,7 @@ export function ChecklistSection({
 }: Props) {
   const askDelete = (item: ChecklistItem) => {
     if (readOnly || !onDelete || FIXED_KEYS.includes(item.field_key ?? '')) return;
-    Alert.alert('حذف الصف', `حذف "${item.label_ar || item.label_en}" من هذا التقرير فقط؟`, [
+    Alert.alert('حذف الصف', `حذف "${item.label_ar || item.label_en}" من هذا التقرير ومن التقارير القادمة لهذه المعدة؟`, [
       { text: 'إلغاء', style: 'cancel' },
       { text: 'حذف', style: 'destructive', onPress: () => onDelete(item.id) },
     ]);
@@ -67,7 +67,7 @@ export function ChecklistSection({
     <View>
       <Text style={styles.title}>Maintenance Checklist:</Text>
       {!readOnly && onDelete ? (
-        <Text style={styles.hint}>اضغط مطولاً على اسم أي صف لحذفه من هذا التقرير.</Text>
+        <Text style={styles.hint}>اضغط مطولاً على اسم أي صف لحذفه من هذا التقرير ومن التقارير القادمة لهذه المعدة.</Text>
       ) : null}
       {visibleItems.map((item) => {
         const def = defs.find((d) => d.key === item.field_key);

@@ -1,4 +1,5 @@
 import { getDatabase } from '../database';
+import { parseTemplateJson } from '@/db/repositories/machines';
 import { DefaultMaterialTemplate, MachineType } from '@/types';
 import { FormRow, FormSetup, isNewer, parseFormRows } from '@/utils/reportForm';
 
@@ -42,12 +43,15 @@ export function replaceReportForms(forms: { types?: Record<string, WebForm>; uni
   Object.entries(forms.units ?? {}).forEach(([key, f]) => f && save('unit', key, f));
 }
 
-function parse<T>(text: string | null): T | null {
-  try {
-    return JSON.parse(text ?? 'null') ?? null;
-  } catch {
-    return null;
-  }
+// The website's data is checked here: a wrong shape counts as "not set", so it can never stop a new report.
+function materialsOf(text: string | null | undefined): DefaultMaterialTemplate[] | null {
+  const list = parseTemplateJson<unknown>(text ?? '', null);
+  return Array.isArray(list) ? list.filter((m) => typeof m?.description === 'string') : null;
+}
+
+function setupOf(text: string | null | undefined): FormSetup | null {
+  const setup = parseTemplateJson<unknown>(text ?? '', null);
+  return setup && typeof setup === 'object' && !Array.isArray(setup) ? (setup as FormSetup) : null;
 }
 
 /** The website's form for this unit and report type, or null when the website has none (the built-in form applies). */
@@ -62,14 +66,14 @@ export function webFormFor(webId: number | null | undefined, type: MachineType):
   if (!unit && !typeForm) return null;
 
   const unitRows = parseFormRows(unit?.rows);
-  const unitMaterials = parse<DefaultMaterialTemplate[]>(unit?.materials ?? null);
+  const unitMaterials = materialsOf(unit?.materials);
   // null at the unit means "use the type's form"; null at the type means "the app's built-in form"
   const useType = typeForm && (!unitRows || !unitMaterials);
   const times = [unit?.changed_at, useType ? typeForm.changed_at : null];
   return {
     rows: unitRows ?? (typeForm ? parseFormRows(typeForm.rows) : null),
-    materials: unitMaterials ?? (typeForm ? parse<DefaultMaterialTemplate[]>(typeForm.materials) : null),
-    setup: parse<FormSetup>(unit?.setup ?? null),
+    materials: unitMaterials ?? (typeForm ? materialsOf(typeForm.materials) : null),
+    setup: setupOf(unit?.setup),
     changedAt: times.reduce<string>((a, b) => (isNewer(b, a) ? b! : a), ''),
   };
 }

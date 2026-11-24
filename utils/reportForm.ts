@@ -53,7 +53,9 @@ export function applyForm(fields: ChecklistFieldDef[], rows: FormRow[] | null | 
   const placed = new Set<string>();
   rows.forEach((row) => {
     if (row.custom) {
-      if (!row.hidden && row.key) out.push({ key: row.key, labelEn: row.label_en, labelAr: row.label_ar, custom: true });
+      if (!row.hidden && row.key) {
+        out.push({ key: row.key, labelEn: String(row.label_en ?? ''), labelAr: String(row.label_ar ?? ''), custom: true });
+      }
       return;
     }
     fields.forEach((f) => {
@@ -61,7 +63,7 @@ export function applyForm(fields: ChecklistFieldDef[], rows: FormRow[] | null | 
       placed.add(f.key);
       if (row.hidden && !CONFIG_KEYS.has(f.key)) return;
       const n = f.key.match(NUMBERED)?.[2] ?? '';
-      const name = (text: string, fallback: string) => (text ? text.replace(/#/g, n) : fallback);
+      const name = (text: unknown, fallback: string) => (typeof text === 'string' && text ? text.replace(/#/g, n) : fallback);
       out.push({ key: f.key, labelEn: name(row.label_en, f.labelEn), labelAr: name(row.label_ar, f.labelAr) });
     });
   });

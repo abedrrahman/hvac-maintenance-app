@@ -559,7 +559,10 @@ function removedRows(reportId: string): Set<string> {
   return new Set((row?.removed_rows ?? '').split('|').filter(Boolean));
 }
 
-/** Removes one row from this report only. The unit's next report has it again. */
+/**
+ * Removes one row from this report. Once the report is sent, the website keeps the row hidden in the unit's form,
+ * so the unit's next reports leave it out too.
+ */
 export function deleteChecklistItem(id: string): void {
   const db = getDatabase();
   const item = db.getFirstSync<ChecklistItem>('SELECT * FROM checklist_items WHERE id = ?', [id]);

@@ -266,6 +266,24 @@ describe('report forms from the website', () => {
     }
   });
 
+  it('a form of the wrong shape from the website never stops a new report', async () => {
+    const unit = webUnit(509);
+    replaceReportForms({
+      types: {
+        rtu: {
+          rows: [{ key: 'custom_bad00001', custom: true } as never, { key: 'phase_rotation', label_en: 5 } as never],
+          materials: {} as never,
+          changed_at: '2099-06-01T00:00:00Z',
+        },
+      },
+      units: { '509': { setup: 'odd' as never, changed_at: '2099-06-01T00:00:00Z' } },
+    });
+    const report = await createReport('rtu', { machineId: unit });
+    expect(item(report.id, 'custom_bad00001').label_en).toBe('');
+    expect(item(report.id, 'phase_rotation').label_en).toBe('Phase Rotation');
+    expect(getFullReport(report.id)!.materials.map((m) => m.description)).toEqual(['']);
+  });
+
   it('the next report keeps the form while the website has not changed it', async () => {
     const unit = webUnit(504);
     replaceReportForms({ types: { rtu: { ...typeForm, changed_at: '2020-01-01T00:00:00Z' } } });
