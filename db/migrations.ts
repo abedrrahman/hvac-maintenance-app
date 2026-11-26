@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 8;
 
 function columnExists(
   db: SQLite.SQLiteDatabase,
@@ -119,9 +119,6 @@ function migrateV1(db: SQLite.SQLiteDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_photos_report ON photos(report_id);
     CREATE INDEX IF NOT EXISTS idx_signatures_report ON signatures(report_id);
   `);
-    db.execSync(`
-    CREATE INDEX IF NOT EXISTS idx_reports_machine ON reports(machine_id);
-  `);
 }
 
 function migrateV2(db: SQLite.SQLiteDatabase): void {
@@ -172,6 +169,123 @@ function migrateV2(db: SQLite.SQLiteDatabase): void {
   if (!columnExists(db, 'materials', 'unit')) {
     db.execSync("ALTER TABLE materials ADD COLUMN unit TEXT DEFAULT ''");
   }
+  // After the column exists: creating this index in V1 failed on a fresh install.
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_machine ON reports(machine_id)');
+}
+
+// V3: link to the ASEE website. Machines remember their website unit; reports remember whether they were uploaded.
+function migrateV3(db: SQLite.SQLiteDatabase): void {
+  const add = (table: string, column: string, type: string) => {
+    if (!columnExists(db, table, column)) {
+      db.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  };
+  add('machines', 'web_id', 'INTEGER');
+  add('machines', 'name', "TEXT DEFAULT ''");
+  add('machines', 'project', "TEXT DEFAULT ''");
+  add('machines', 'web_documents', "TEXT DEFAULT '[]'");
+  add('machines', 'web_visit_id', 'INTEGER');
+  add('reports', 'uploaded_at', 'TEXT');
+  add('reports', 'upload_error', "TEXT DEFAULT ''");
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_machines_web ON machines(web_id)');
+  // The website's alarm list, kept on the phone so codes can be looked up with no signal.
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS alarms (
+      code TEXT NOT NULL,
+      key TEXT NOT NULL,
+      controller TEXT DEFAULT '',
+      name_en TEXT DEFAULT '',
+      name_ar TEXT DEFAULT '',
+      causes_en TEXT DEFAULT '',
+      causes_ar TEXT DEFAULT '',
+      checks_en TEXT DEFAULT '',
+      checks_ar TEXT DEFAULT '',
+      effect_en TEXT DEFAULT '',
+      effect_ar TEXT DEFAULT '',
+      action_en TEXT DEFAULT '',
+      action_ar TEXT DEFAULT '',
+      reset_en TEXT DEFAULT '',
+      reset_ar TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_alarms_key ON alarms(key);
+  `);
+}
+
+// V4: contract visits. A machine remembers the date of its next visit; reports made for one visit share a group.
+function migrateV4(db: SQLite.SQLiteDatabase): void {
+  if (!columnExists(db, 'machines', 'web_visit_date')) {
+    db.execSync('ALTER TABLE machines ADD COLUMN web_visit_date TEXT');
+  }
+  if (!columnExists(db, 'reports', 'visit_group')) {
+    db.execSync('ALTER TABLE reports ADD COLUMN visit_group TEXT');
+  }
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_visit ON reports(visit_group)');
+}
+
+// V5: the equipment list starts from the country, like the website: country -> clients -> units.
+function migrateV5(db: SQLite.SQLiteDatabase): void {
+  if (!columnExists(db, 'machines', 'country')) {
+    db.execSync("ALTER TABLE machines ADD COLUMN country TEXT DEFAULT ''");
+  }
+}
+
+// V6: a report remembers the template rows the technician removed from it, so they are not put back.
+function migrateV6(db: SQLite.SQLiteDatabase): void {
+  if (!columnExists(db, 'reports', 'removed_rows')) {
+    db.execSync("ALTER TABLE reports ADD COLUMN removed_rows TEXT DEFAULT ''");
+  }
+}
+
+// V7: the visits the website sends (replaced on every sync), and each report's visit and contract.
+// The contract's number and title are copied onto the report: the website stops sending a visit once it is done,
+// and the report must still know which contract it belongs to.
+function migrateV7(db: SQLite.SQLiteDatabase): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS visits (
+      id INTEGER PRIMARY KEY NOT NULL,
+      number TEXT DEFAULT '',
+      unit_id INTEGER,
+      client_id INTEGER,
+      client_name TEXT DEFAULT '',
+      scheduled_date TEXT DEFAULT '',
+      type TEXT DEFAULT '',
+      status TEXT DEFAULT '',
+      overdue INTEGER DEFAULT 0,
+      assigned_to_me INTEGER DEFAULT 0,
+      contract_id INTEGER,
+      contract_number TEXT DEFAULT '',
+      contract_title TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_visits_contract ON visits(contract_id);
+  `);
+  const add = (column: string, type: string) => {
+    if (!columnExists(db, 'reports', column)) db.execSync(`ALTER TABLE reports ADD COLUMN ${column} ${type}`);
+  };
+  add('visit_id', 'INTEGER');
+  add('contract_id', 'INTEGER');
+  add('contract_number', "TEXT DEFAULT ''");
+  add('contract_title', "TEXT DEFAULT ''");
+  add('contract_batch_id', 'TEXT');
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_visit_id ON reports(visit_id)');
+  db.execSync('CREATE INDEX IF NOT EXISTS idx_reports_contract ON reports(contract_id)');
+}
+
+// V8: the report forms the office sets on the website (replaced on every sync), and the form each report was built from.
+// form_rows is kept on the report so an open report keeps its boxes when the website's form changes later.
+function migrateV8(db: SQLite.SQLiteDatabase): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS report_forms (
+      scope TEXT NOT NULL,
+      key TEXT NOT NULL,
+      report_type TEXT DEFAULT '',
+      rows TEXT,
+      materials TEXT,
+      setup TEXT,
+      changed_at TEXT DEFAULT '',
+      PRIMARY KEY (scope, key)
+    );
+  `);
+  if (!columnExists(db, 'reports', 'form_rows')) db.execSync('ALTER TABLE reports ADD COLUMN form_rows TEXT');
 }
 
 export function runMigrations(db: SQLite.SQLiteDatabase): void {
@@ -185,6 +299,36 @@ export function runMigrations(db: SQLite.SQLiteDatabase): void {
   if (getSchemaVersion(db) < 2) {
     migrateV2(db);
     setSchemaVersion(db, 2);
+  }
+
+  if (getSchemaVersion(db) < 3) {
+    migrateV3(db);
+    setSchemaVersion(db, 3);
+  }
+
+  if (getSchemaVersion(db) < 4) {
+    migrateV4(db);
+    setSchemaVersion(db, 4);
+  }
+
+  if (getSchemaVersion(db) < 5) {
+    migrateV5(db);
+    setSchemaVersion(db, 5);
+  }
+
+  if (getSchemaVersion(db) < 6) {
+    migrateV6(db);
+    setSchemaVersion(db, 6);
+  }
+
+  if (getSchemaVersion(db) < 7) {
+    migrateV7(db);
+    setSchemaVersion(db, 7);
+  }
+
+  if (getSchemaVersion(db) < 8) {
+    migrateV8(db);
+    setSchemaVersion(db, 8);
   }
 
   if (getSchemaVersion(db) < CURRENT_VERSION) {

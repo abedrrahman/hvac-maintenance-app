@@ -51,7 +51,7 @@ export function FormField({
     if (onDebouncedRef.current) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
-        console.log('💾 Debounced save:', text); // add this
+
         onDebouncedRef.current?.(text);
       }, debounceMs);
     }
@@ -63,7 +63,7 @@ export function FormField({
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    console.log('💾 Blur save:', localValue);
+
     onDebouncedRef.current?.(localValue);
     onBlur?.(e);
   };

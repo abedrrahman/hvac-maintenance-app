@@ -61,14 +61,14 @@ export default function CustomTemplatesScreen() {
         labelEn="English Label"
         labelAr="التسمية بالإنجليزية"
         value={labelEn}
-        onDebouncedChange={setLabelEn}
+        onChangeText={setLabelEn}
         placeholder="e.g. Motor Amps"
       />
       <FormField
         labelEn="Arabic Label"
         labelAr="التسمية بالعربية"
         value={labelAr}
-        onDebouncedChange={setLabelAr}
+        onChangeText={setLabelAr}
         placeholder="e.g. أمبير المotor"
       />
       <Button title="Add Field" onPress={handleAdd} variant="accent" />

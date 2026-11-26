@@ -1,9 +1,10 @@
 import { Button } from '@/components/Button';
 import { DropdownPicker } from '@/components/DropdownPicker';
-import { MAINTENANCE_TYPES } from '@/constants/company';
+import { MAINTENANCE_TYPES, maintenanceLabel } from '@/constants/company';
 import { MACHINE_TYPES, getMachineTypeInfo } from '@/constants/machineTypes';
+import { IconText } from '@/components/Icon';
 import { colors, fontSize, spacing } from '@/constants/theme';
-import { searchMachines } from '@/db/repositories/machines';
+import { findMachines } from '@/db/repositories/machines';
 import {
   createReport,
   getCustomChecklistTemplates,
@@ -37,7 +38,7 @@ export default function NewReportScreen() {
 
   useEffect(() => {
     if (query.trim().length >= 1) {
-      setMachines(searchMachines(query.trim()));
+      setMachines(findMachines({ search: query.trim(), limit: 30 })); // the website list holds hundreds of units
     } else {
       setMachines([]);
     }
@@ -89,7 +90,7 @@ export default function NewReportScreen() {
         placeholder="بحث بالاسم، الرقم التسلسلي، العميل..."
         placeholderTextColor={colors.textSecondary}
         value={query}
-        onDebouncedChange={setQuery}
+        onChangeText={setQuery}
         textAlign="right"
       />
 
@@ -108,7 +109,7 @@ export default function NewReportScreen() {
                 setMachines([]);
               }}>
               <Text style={styles.machineTitle}>
-                {item.model || item.serial_number}
+                {item.name || item.model || item.serial_number}
               </Text>
               <Text style={styles.machineSub}>
                 {item.client_name} — {item.site}
@@ -131,9 +132,9 @@ export default function NewReportScreen() {
 
       {selectedMachine && (
         <View style={styles.selectedBox}>
-          <Text style={styles.selectedTitle}>✓ معدة محددة</Text>
+          <IconText icon="check" text="معدة محددة" color={colors.accent} textStyle={styles.selectedTitle} />
           <Text style={styles.selectedText}>
-            {selectedMachine.model} — {selectedMachine.client_name}
+            {selectedMachine.name || selectedMachine.model} — {selectedMachine.client_name}
           </Text>
           <Pressable onPress={() => setSelectedMachine(null)}>
             <Text style={styles.changeLink}>تغيير</Text>
@@ -176,7 +177,7 @@ export default function NewReportScreen() {
           <Pressable
             style={styles.dropdown}
             onPress={() => setShowMaintenancePicker(true)}>
-            <Text style={styles.dropdownText}>{maintenanceType}</Text>
+            <Text style={styles.dropdownText}>{maintenanceLabel(maintenanceType)}</Text>
           </Pressable>
           <Button
             title="إنشاء التقرير"
@@ -192,6 +193,7 @@ export default function NewReportScreen() {
         options={[...MAINTENANCE_TYPES]}
         selected={maintenanceType}
         onSelect={(v) => setMaintenanceType(v as MaintenanceType)}
+        label={maintenanceLabel}
         onClose={() => setShowMaintenancePicker(false)}
         title="نوع الصيانة"
       />

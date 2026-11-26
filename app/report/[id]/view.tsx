@@ -1,9 +1,10 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button } from '@/components/Button';
 import { ChecklistSection } from '@/components/ChecklistSection';
 import { LockedBadge } from '@/components/LockedBadge';
 import { colors, fontSize, spacing } from '@/constants/theme';
+import { maintenanceLabel } from '@/constants/company';
 import { getMachineTypeInfo } from '@/constants/machineTypes';
 import { exportReportPdf, sharePdf } from '@/services/pdfGenerator';
 import { useReport } from '@/hooks/useReport';
@@ -31,7 +32,7 @@ export default function ReportViewScreen() {
       <LockedBadge />
       <Text style={styles.title}>{machineInfo.labelAr}</Text>
       <Text style={styles.meta}>{report.client} — {report.site}</Text>
-      <Text style={styles.meta}>{report.date} | {report.maintenance_type}</Text>
+      <Text style={styles.meta}>{report.date} | {maintenanceLabel(report.maintenance_type)}</Text>
       <Text style={styles.meta}>{report.technician}</Text>
       <Text style={styles.meta}>{report.machine_model} | S/N: {report.serial_no}</Text>
 
@@ -83,6 +84,8 @@ export default function ReportViewScreen() {
           try {
             const uri = await exportReportPdf(report);
             await sharePdf(uri);
+          } catch {
+            Alert.alert('خطأ', 'فشل تصدير PDF.');
           } finally { setExporting(false); }
         }} />
       <Button title="رجوع" variant="secondary" onPress={() => router.back()} />

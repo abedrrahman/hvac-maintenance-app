@@ -1,11 +1,12 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { IconText } from './Icon';
 import { colors, fontSize, spacing } from '@/constants/theme';
 
 export function LockedBadge() {
   return (
     <View style={styles.badge}>
-      <Text style={styles.text}>🔒 SIGNED & LOCKED</Text>
+      <IconText icon="lock" text="SIGNED & LOCKED" color={colors.textLight} textStyle={styles.text} />
     </View>
   );
 }

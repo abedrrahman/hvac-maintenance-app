@@ -15,6 +15,21 @@ export const MAINTENANCE_TYPES = [
   'Commissioning',
 ] as const;
 
+// The saved value stays English: the website reads it.
+const MAINTENANCE_AR: Record<string, string> = {
+  Startup: 'تشغيل أولي',
+  Preventive: 'صيانة وقائية',
+  Corrective: 'صيانة تصحيحية',
+  Emergency: 'صيانة طارئة',
+  Commissioning: 'تشغيل وتسليم',
+};
+
+export const maintenanceAr = (type: string): string => MAINTENANCE_AR[type] ?? '';
+
+/** "صيانة وقائية / Preventive" for the screens. */
+export const maintenanceLabel = (type: string): string =>
+  MAINTENANCE_AR[type] ? `${MAINTENANCE_AR[type]} / ${type}` : type;
+
 export const REFRIGERANT_TYPES = [
   'R410A',
   'R32',

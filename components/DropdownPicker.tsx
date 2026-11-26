@@ -16,6 +16,8 @@ interface Props {
   onSelect: (value: string) => void;
   onClose: () => void;
   title?: string;
+  /** The text shown for an option, when it is not the saved value itself. */
+  label?: (value: string) => string;
 }
 
 export function DropdownPicker({
@@ -25,6 +27,7 @@ export function DropdownPicker({
   onSelect,
   onClose,
   title = 'Select',
+  label = (value) => value,
 }: Props) {
   return (
     <Modal visible={visible} transparent animationType="slide">
@@ -45,7 +48,7 @@ export function DropdownPicker({
                     styles.optionText,
                     selected === opt && styles.selectedText,
                   ]}>
-                  {opt}
+                  {label(opt)}
                 </Text>
               </Pressable>
             ))}
